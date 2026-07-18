@@ -144,16 +144,8 @@ runs:
           "${EXTRA_SECRETS}" "${RUNNER_HOME}/extra-secrets"
         python3 -c 'import json,sys; json.dump(json.loads(sys.argv[1]), open(sys.argv[2],"w"), separators=(",",":"))' \
           "${EXTRA_ENV}" "${RUNNER_HOME}/extra-env"
-        METADATA="host-project=${{ inputs.project }},\
-runner-image=${{ inputs.image }},\
-control-plane-ws=${{ inputs.control_plane_ws }},\
-runner-id=${{ inputs.runner_id }},\
-runner-config-path=${{ inputs.runner_config_path }},\
-polycore-project-slug=${{ inputs.project_slug }},\
-google-cloud-project=${{ inputs.project }},\
-container-name=${{ inputs.container_name }},\
-secret-join-token=POLYCORE_JOIN_TOKEN,\
-secret-signing-secret=POLYCORE_SIGNING_SECRET"
+        # Single-line metadata string (must stay indented inside this YAML block).
+        METADATA="host-project=${{ inputs.project }},runner-image=${{ inputs.image }},control-plane-ws=${{ inputs.control_plane_ws }},runner-id=${{ inputs.runner_id }},runner-config-path=${{ inputs.runner_config_path }},polycore-project-slug=${{ inputs.project_slug }},google-cloud-project=${{ inputs.project }},container-name=${{ inputs.container_name }},secret-join-token=POLYCORE_JOIN_TOKEN,secret-signing-secret=POLYCORE_SIGNING_SECRET"
         {
           echo "metadata<<EOF"
           echo "${METADATA}"
