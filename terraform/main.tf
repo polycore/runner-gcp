@@ -52,6 +52,18 @@ variable "extra_secret_ids" {
   default     = []
 }
 
+variable "join_token_secret_id" {
+  description = "Secret Manager id for the enrollment join-token shell this module creates."
+  type        = string
+  default     = "POLYCORE_JOIN_TOKEN"
+}
+
+variable "signing_secret_secret_id" {
+  description = "Secret Manager id for the enrollment signing-secret shell this module creates."
+  type        = string
+  default     = "POLYCORE_SIGNING_SECRET"
+}
+
 locals {
   vm_sa = "${var.project_number}-compute@developer.gserviceaccount.com"
 }
@@ -165,7 +177,7 @@ resource "google_project_iam_member" "vm_firebase_auth_admin" {
 
 resource "google_secret_manager_secret" "join_token" {
   project   = var.project_id
-  secret_id = "POLYCORE_JOIN_TOKEN"
+  secret_id = var.join_token_secret_id
 
   replication {
     auto {}
@@ -176,7 +188,7 @@ resource "google_secret_manager_secret" "join_token" {
 
 resource "google_secret_manager_secret" "signing_secret" {
   project   = var.project_id
-  secret_id = "POLYCORE_SIGNING_SECRET"
+  secret_id = var.signing_secret_secret_id
 
   replication {
     auto {}

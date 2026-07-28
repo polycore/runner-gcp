@@ -1,4 +1,4 @@
-# Polycore runner — GCP preset
+# Polycore runner - GCP preset
 
 Public install path for a customer-hosted [Polycore](https://polycore.ai) runner
 on Google Cloud. **This repo is the only thing customers need from GitHub** for
@@ -6,16 +6,18 @@ GCP deploy. You never need access to Polycore's private application monorepo.
 
 Contains:
 
-- **Terraform module** (`terraform/`) — Artifact Registry, deploy SA, VM SA IAM
+- **Terraform module** (`terraform/`) - Artifact Registry, deploy SA, VM SA IAM
   (ADC), enrollment secret shells
-- **GitHub Action** (`.github/actions/deploy-runner-gcp`) — build/push image,
+- **GitHub Action** (`.github/actions/deploy-runner-gcp`) - build/push image,
   provision / rollout / teardown the GCE VM
-- **Dockerfile.example** — reference customer image layout
+- **Dockerfile.example** - reference customer image layout
 
 Your integration repo stays thin: `polycore.json`, `actions/`, `context/`,
 `Dockerfile`, pinned `@polycore/runner` on npm.
 
 ## Runtime contract
+
+Container env (what `@polycore/runner` reads):
 
 | Env | Purpose |
 | --- | --- |
@@ -30,11 +32,17 @@ Your integration repo stays thin: `polycore.json`, `actions/`, `context/`,
 Credentials for Google APIs: **Application Default Credentials** (VM service
 account). No key files on the happy path.
 
+Secret Manager **resource ids** default to `POLYCORE_JOIN_TOKEN` /
+`POLYCORE_SIGNING_SECRET` (same strings as the container env names), but both
+the Terraform module and the deploy Action accept overrides when a host project
+already uses different secret ids. The startup script always maps whatever was
+fetched onto the fixed container env names above.
+
 ## Terraform
 
 ```hcl
 module "polycore_runner" {
-  source = "git::https://github.com/polycore/runner-gcp.git//terraform?ref=v0.1.1"
+  source = "git::https://github.com/polycore/runner-gcp.git//terraform?ref=v0.1.2"
 
   project_id     = "acme-prod"
   project_number = "123456789012"
@@ -43,6 +51,9 @@ module "polycore_runner" {
   enable_firestore     = true
   enable_firebase_auth = false
   # extra_secret_ids = ["MY_API_KEY"]
+  # Optional: override Secret Manager ids for the enrollment shells
+  # join_token_secret_id     = "polycore-join-token"
+  # signing_secret_secret_id = "polycore-signing-secret"
 }
 ```
 
@@ -56,7 +67,7 @@ source. No company incorporation required.
   with:
     credentials_json: ${{ secrets.POLYCORE_DEPLOY_SA_KEY }}
 - uses: google-github-actions/setup-gcloud@v2
-- uses: polycore/runner-gcp/.github/actions/deploy-runner-gcp@v0.1.1
+- uses: polycore/runner-gcp/.github/actions/deploy-runner-gcp@v0.1.2
   with:
     mode: rollout          # or provision | teardown
     project: acme-prod
@@ -64,6 +75,9 @@ source. No company incorporation required.
     runner_id: ${{ vars.POLYCORE_RUNNER_ID }}
     project_slug: acme-prod
     integration_dir: polycore-integration
+    # Optional: Secret Manager ids (defaults match the Terraform shells)
+    # join_token_secret: polycore-join-token
+    # signing_secret_secret: polycore-signing-secret
 ```
 
 First boot: `mode: provision`. Later: `mode: rollout`.

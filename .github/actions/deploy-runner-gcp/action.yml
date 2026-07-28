@@ -59,6 +59,18 @@ inputs:
     description: Optional env var name passed as Docker BuildKit secret id=node_auth_token (e.g. NODE_AUTH_TOKEN)
     required: false
     default: ""
+  join_token_secret:
+    description: >
+      Secret Manager secret id that holds the enrollment join token. The value is
+      still injected into the container as POLYCORE_JOIN_TOKEN (runner contract).
+    required: false
+    default: POLYCORE_JOIN_TOKEN
+  signing_secret_secret:
+    description: >
+      Secret Manager secret id that holds the enrollment signing secret. The
+      value is still injected into the container as POLYCORE_SIGNING_SECRET.
+    required: false
+    default: POLYCORE_SIGNING_SECRET
   extra_secrets:
     description: >
       Optional JSON array of {"secret":"SECRET_ID","env":"ENV_VAR"} for secrets
@@ -145,7 +157,9 @@ runs:
         python3 -c 'import json,sys; json.dump(json.loads(sys.argv[1]), open(sys.argv[2],"w"), separators=(",",":"))' \
           "${EXTRA_ENV}" "${RUNNER_HOME}/extra-env"
         # Single-line metadata string (must stay indented inside this YAML block).
-        METADATA="host-project=${{ inputs.project }},runner-image=${{ inputs.image }},control-plane-ws=${{ inputs.control_plane_ws }},runner-id=${{ inputs.runner_id }},runner-config-path=${{ inputs.runner_config_path }},polycore-project-slug=${{ inputs.project_slug }},google-cloud-project=${{ inputs.project }},container-name=${{ inputs.container_name }},secret-join-token=POLYCORE_JOIN_TOKEN,secret-signing-secret=POLYCORE_SIGNING_SECRET"
+        # secret-join-token / secret-signing-secret are Secret Manager ids; the
+        # startup script maps their values onto the fixed container env names.
+        METADATA="host-project=${{ inputs.project }},runner-image=${{ inputs.image }},control-plane-ws=${{ inputs.control_plane_ws }},runner-id=${{ inputs.runner_id }},runner-config-path=${{ inputs.runner_config_path }},polycore-project-slug=${{ inputs.project_slug }},google-cloud-project=${{ inputs.project }},container-name=${{ inputs.container_name }},secret-join-token=${{ inputs.join_token_secret }},secret-signing-secret=${{ inputs.signing_secret_secret }}"
         {
           echo "metadata<<EOF"
           echo "${METADATA}"
