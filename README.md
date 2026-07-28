@@ -42,7 +42,7 @@ fetched onto the fixed container env names above.
 
 ```hcl
 module "polycore_runner" {
-  source = "git::https://github.com/polycore/runner-gcp.git//terraform?ref=v0.1.2"
+  source = "git::https://github.com/polycore/runner-gcp.git//terraform?ref=v0.1.3"
 
   project_id     = "acme-prod"
   project_number = "123456789012"
@@ -67,7 +67,7 @@ source. No company incorporation required.
   with:
     credentials_json: ${{ secrets.POLYCORE_DEPLOY_SA_KEY }}
 - uses: google-github-actions/setup-gcloud@v2
-- uses: polycore/runner-gcp/.github/actions/deploy-runner-gcp@v0.1.2
+- uses: polycore/runner-gcp/.github/actions/deploy-runner-gcp@v0.1.3
   with:
     mode: rollout          # or provision | teardown
     project: acme-prod
