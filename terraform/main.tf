@@ -1,9 +1,3 @@
-# Opinionated GCP deployment for one Polycore runner.
-#
-# Terraform owns the complete, stable runtime: Artifact Registry, IAM, secrets,
-# health checking, the COS instance template, and the managed instance group.
-# CI only publishes IMAGE:VERSION, moves IMAGE:live, and rolls the MIG.
-
 terraform {
   required_version = ">= 1.5.0"
   required_providers {
@@ -152,10 +146,6 @@ locals {
   ])
 }
 
-# ---------------------------------------------------------------------------
-# APIs
-# ---------------------------------------------------------------------------
-
 resource "google_project_service" "services" {
   for_each = toset([
     "artifactregistry.googleapis.com",
@@ -172,10 +162,6 @@ resource "google_project_service" "services" {
   disable_on_destroy = false
 }
 
-# ---------------------------------------------------------------------------
-# Artifact Registry
-# ---------------------------------------------------------------------------
-
 resource "google_artifact_registry_repository" "polycore" {
   project       = var.project_id
   location      = var.region
@@ -184,16 +170,11 @@ resource "google_artifact_registry_repository" "polycore" {
   format        = "DOCKER"
 
   docker_config {
-    # Version tags are retained while CI atomically moves the `live` tag.
     immutable_tags = false
   }
 
   depends_on = [google_project_service.services["artifactregistry.googleapis.com"]]
 }
-
-# ---------------------------------------------------------------------------
-# Service accounts and IAM
-# ---------------------------------------------------------------------------
 
 resource "google_service_account" "runner" {
   project      = var.project_id
@@ -271,10 +252,6 @@ resource "google_project_iam_member" "runner_firebase_auth_admin" {
   member  = "serviceAccount:${google_service_account.runner.email}"
 }
 
-# ---------------------------------------------------------------------------
-# Secrets
-# ---------------------------------------------------------------------------
-
 resource "google_secret_manager_secret" "join_token" {
   project   = var.project_id
   secret_id = var.join_token_secret_id
@@ -318,10 +295,6 @@ resource "google_secret_manager_secret_iam_member" "runner_extra_secrets" {
   depends_on = [google_project_service.services["secretmanager.googleapis.com"]]
 }
 
-# ---------------------------------------------------------------------------
-# Health check and restricted ingress
-# ---------------------------------------------------------------------------
-
 resource "google_compute_health_check" "runner" {
   project = var.project_id
   name    = "${var.runner_name}-health"
@@ -355,10 +328,6 @@ resource "google_compute_firewall" "runner_health_check" {
 
   depends_on = [google_project_service.services["compute.googleapis.com"]]
 }
-
-# ---------------------------------------------------------------------------
-# COS instance template and managed instance group
-# ---------------------------------------------------------------------------
 
 data "google_compute_image" "cos" {
   family  = "cos-stable"
@@ -446,7 +415,6 @@ resource "google_compute_instance_group_manager" "runner" {
   }
 
   instance_lifecycle_policy {
-    # A control-plane outage cannot be repaired by recreating the runner VM.
     on_failed_health_check = "DO_NOTHING"
   }
 
@@ -459,16 +427,10 @@ resource "google_compute_instance_group_manager" "runner" {
     max_unavailable_fixed          = 0
   }
 
-  # First apply can precede the first `live` image. Deployment CI performs the
-  # health-gated wait after publishing and rolling a release.
   wait_for_instances = false
 
   depends_on = [google_compute_firewall.runner_health_check]
 }
-
-# ---------------------------------------------------------------------------
-# Outputs
-# ---------------------------------------------------------------------------
 
 output "image_repository" {
   description = "Docker image repository without a tag."

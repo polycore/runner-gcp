@@ -1,8 +1,4 @@
 # syntax=docker/dockerfile:1
-#
-# Reference customer runner image. Copy into your runner code (or use as a
-# starting point). Pin `@polycore/runner` in package.json; bake config +
-# actions; bind project slug and GCP project from runtime env.
 
 FROM node:22-slim
 ENV NODE_ENV=production

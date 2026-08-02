@@ -1,7 +1,4 @@
 #!/usr/bin/env bash
-#
-# Container-Optimized OS startup script for a Polycore runner MIG.
-# Metadata is written into an immutable instance template by the deploy Action.
 
 set -euo pipefail
 STARTUP_LOG="${POLYCORE_STARTUP_LOG:-/var/log/polycore-runner-startup.log}"
