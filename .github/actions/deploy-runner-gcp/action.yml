@@ -1,63 +1,29 @@
 name: Deploy Polycore runner (GCP)
 description: >
-  Build and push a runner image, then provision, roll out, or tear down a
-  size-one managed instance group on Container-Optimized OS.
+  Build and push an immutable runner version, move the live tag to that digest,
+  and roll the Terraform-managed runner MIG.
 
 inputs:
-  mode:
-    description: provision | rollout | teardown
-    required: true
   project:
-    description: GCP project id that hosts the MIG and Artifact Registry
+    description: GCP project that hosts the MIG and Artifact Registry
     required: true
-  region:
-    description: Artifact Registry region
-    required: false
-    default: europe-west1
   zone:
-    description: Zone for the runner MIG
+    description: Zone of the Terraform-managed runner MIG
     required: false
     default: europe-west1-b
   image:
-    description: Full tagged image ref to build and push
+    description: Full Artifact Registry image repository without a tag
     required: true
-  runner_id:
-    description: Control-plane runner id (rnr_...)
+  version:
+    description: Immutable Docker version tag for this release
     required: true
-  project_slug:
-    description: Polycore project slug this runner serves
-    required: true
+  runner_name:
+    description: Terraform-managed MIG name
+    required: false
+    default: polycore-runner
   integration_dir:
-    description: Build context containing the runner code
+    description: Docker build context containing the runner code
     required: true
-  control_plane_ws:
-    description: Control-plane WebSocket URL
-    required: false
-    default: wss://cp.polycore.ai/runner
-  runner_config_path:
-    description: Path to polycore.json inside the image
-    required: false
-    default: /app/integration/polycore.json
-  vm_name:
-    description: Stable MIG and VM base name
-    required: false
-    default: polycore-runner
-  container_name:
-    description: Docker container name on each VM
-    required: false
-    default: polycore-runner
-  machine_type:
-    description: Compute Engine machine type
-    required: false
-    default: e2-micro
-  network:
-    description: VPC network used by the runner VMs
-    required: false
-    default: default
-  vm_service_account:
-    description: Dedicated runner VM service-account id or full email
-    required: false
-    default: polycore-runner-vm
   dockerfile:
     description: Dockerfile path relative to integration_dir
     required: false
@@ -66,38 +32,14 @@ inputs:
     description: Optional env var passed as Docker BuildKit secret id=node_auth_token
     required: false
     default: ""
-  join_token_secret:
-    description: Secret Manager id containing the enrollment join token
-    required: false
-    default: POLYCORE_JOIN_TOKEN
-  signing_secret_secret:
-    description: Secret Manager id containing the enrollment signing secret
-    required: false
-    default: POLYCORE_SIGNING_SECRET
-  extra_secrets:
-    description: JSON array of {"secret":"SECRET_ID","env":"ENV_VAR"}
-    required: false
-    default: "[]"
-  extra_env:
-    description: JSON object of plain environment bindings
-    required: false
-    default: "{}"
-  health_check:
-    description: Health check name; defaults to VM_NAME-health
-    required: false
-    default: ""
-  health_check_port:
-    description: Port used by the restricted health check endpoint
-    required: false
-    default: "8080"
-  health_initial_delay:
-    description: Maximum startup time for a replacement to become healthy
-    required: false
-    default: "300"
-  min_ready:
-    description: Time a healthy replacement must remain ready before old VM removal
-    required: false
-    default: 30s
+
+outputs:
+  digest:
+    description: Digest promoted to the live tag
+    value: ${{ steps.release.outputs.digest }}
+  version_image:
+    description: Immutable versioned image reference
+    value: ${{ steps.release.outputs.version_image }}
 
 runs:
   using: composite
@@ -105,55 +47,49 @@ runs:
     - name: Validate inputs
       shell: bash
       env:
-        HEALTH_CHECK_PORT: ${{ inputs.health_check_port }}
         IMAGE: ${{ inputs.image }}
-        MODE: ${{ inputs.mode }}
-        RUNNER_ID: ${{ inputs.runner_id }}
-        VM_NAME: ${{ inputs.vm_name }}
+        RUNNER_NAME: ${{ inputs.runner_name }}
+        VERSION: ${{ inputs.version }}
       run: |
         set -euo pipefail
-        case "${MODE}" in
-          provision|rollout|teardown) ;;
-          *)
-            echo "error: mode must be provision, rollout, or teardown" >&2
-            exit 1
-            ;;
-        esac
-        if [[ -z "${RUNNER_ID}" ]]; then
-          echo "error: runner_id is required" >&2
+        if [[ "${IMAGE}" == *:* || "${IMAGE}" == *@* ]]; then
+          echo "error: image must not include a tag or digest" >&2
           exit 1
         fi
-        if [[ "${MODE}" != "teardown" && ( "${IMAGE}" != *:* || "${IMAGE}" == *@* ) ]]; then
-          echo "error: image must be a tagged Artifact Registry reference" >&2
+        if [[ ! "${VERSION}" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
+          echo "error: version must be a valid Docker tag" >&2
           exit 1
         fi
-        if [[ ! "${VM_NAME}" =~ ^[a-z]([-a-z0-9]*[a-z0-9])?$ ]] || (( ${#VM_NAME} > 40 )); then
-          echo "error: vm_name must be a valid GCE name of at most 40 characters" >&2
+        if [[ "${VERSION}" == "live" ]]; then
+          echo "error: version must be immutable and cannot be live" >&2
           exit 1
         fi
-        if [[ ! "${HEALTH_CHECK_PORT}" =~ ^[0-9]+$ ]] || (( HEALTH_CHECK_PORT < 1 || HEALTH_CHECK_PORT > 65535 )); then
-          echo "error: health_check_port must be between 1 and 65535" >&2
+        if [[ ! "${RUNNER_NAME}" =~ ^[a-z]([-a-z0-9]*[a-z0-9])?$ ]]; then
+          echo "error: runner_name must be a valid GCE name" >&2
           exit 1
         fi
 
     - name: Configure Docker for Artifact Registry
-      if: ${{ inputs.mode != 'teardown' }}
       shell: bash
       env:
-        REGION: ${{ inputs.region }}
-      run: gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+        IMAGE: ${{ inputs.image }}
+      run: |
+        set -euo pipefail
+        REGISTRY_HOST="${IMAGE%%/*}"
+        gcloud auth configure-docker "${REGISTRY_HOST}" --quiet
 
-    - name: Build and push runner image
-      if: ${{ inputs.mode != 'teardown' }}
+    - name: Build and push immutable runner version
       shell: bash
       working-directory: ${{ inputs.integration_dir }}
       env:
         BUILD_SECRET_ENV: ${{ inputs.build_secret_env }}
         DOCKERFILE: ${{ inputs.dockerfile }}
         IMAGE: ${{ inputs.image }}
+        VERSION: ${{ inputs.version }}
       run: |
         set -euo pipefail
-        DOCKER_ARGS=(build --platform=linux/amd64 -f "${DOCKERFILE}" -t "${IMAGE}")
+        VERSION_IMAGE="${IMAGE}:${VERSION}"
+        DOCKER_ARGS=(build --platform=linux/amd64 -f "${DOCKERFILE}" -t "${VERSION_IMAGE}")
         if [[ -n "${BUILD_SECRET_ENV}" ]]; then
           if [[ -z "${!BUILD_SECRET_ENV:-}" ]]; then
             echo "error: build_secret_env=${BUILD_SECRET_ENV} is set but that env var is empty" >&2
@@ -163,189 +99,51 @@ runs:
         fi
         DOCKER_ARGS+=(.)
         docker "${DOCKER_ARGS[@]}"
-        docker push "${IMAGE}"
+        docker push "${VERSION_IMAGE}"
 
-    - name: Resolve immutable deployment inputs
-      if: ${{ inputs.mode != 'teardown' }}
+    - name: Promote version to live
       id: release
       shell: bash
       env:
-        HEALTH_CHECK_INPUT: ${{ inputs.health_check }}
         IMAGE: ${{ inputs.image }}
-        PROJECT: ${{ inputs.project }}
-        VM_NAME: ${{ inputs.vm_name }}
-        VM_SERVICE_ACCOUNT: ${{ inputs.vm_service_account }}
+        VERSION: ${{ inputs.version }}
       run: |
         set -euo pipefail
-        DIGEST="$(gcloud artifacts docker images describe "${IMAGE}" --format='value(image_summary.digest)')"
+        VERSION_IMAGE="${IMAGE}:${VERSION}"
+        DIGEST="$(gcloud artifacts docker images describe "${VERSION_IMAGE}" --format='value(image_summary.digest)')"
         if [[ -z "${DIGEST}" ]]; then
           echo "error: could not resolve the pushed image digest" >&2
           exit 1
         fi
-        IMAGE_REPOSITORY="${IMAGE%:*}"
-        IMMUTABLE_IMAGE="${IMAGE_REPOSITORY}@${DIGEST}"
-        DIGEST_SHORT="${DIGEST#sha256:}"
-        RUN_SUFFIX="${GITHUB_RUN_ID:-$(date -u +%s)}-${GITHUB_RUN_ATTEMPT:-1}"
-        TEMPLATE_PREFIX="${VM_NAME:0:30}"
-        TEMPLATE_NAME="${TEMPLATE_PREFIX}-${DIGEST_SHORT:0:12}-${RUN_SUFFIX}"
-        HEALTH_CHECK="${HEALTH_CHECK_INPUT:-${VM_NAME}-health}"
-        if [[ "${VM_SERVICE_ACCOUNT}" == *@* ]]; then
-          VM_SA="${VM_SERVICE_ACCOUNT}"
-        else
-          VM_SA="${VM_SERVICE_ACCOUNT}@${PROJECT}.iam.gserviceaccount.com"
-        fi
+        gcloud artifacts docker tags add "${IMAGE}@${DIGEST}" "${IMAGE}:live" --quiet
         {
-          echo "vm_sa=${VM_SA}"
-          echo "immutable_image=${IMMUTABLE_IMAGE}"
-          echo "template_name=${TEMPLATE_NAME}"
-          echo "health_check=${HEALTH_CHECK}"
+          echo "digest=${DIGEST}"
+          echo "version_image=${VERSION_IMAGE}"
         } >> "${GITHUB_OUTPUT}"
 
-    - name: Build instance metadata
-      if: ${{ inputs.mode != 'teardown' }}
-      id: metadata
+    - name: Roll runner MIG
       shell: bash
       env:
-        CONTAINER_NAME: ${{ inputs.container_name }}
-        CONTROL_PLANE_WS: ${{ inputs.control_plane_ws }}
-        EXTRA_ENV: ${{ inputs.extra_env }}
-        EXTRA_SECRETS: ${{ inputs.extra_secrets }}
-        HEALTH_CHECK_PORT: ${{ inputs.health_check_port }}
-        HOST_PROJECT: ${{ inputs.project }}
-        IMAGE: ${{ steps.release.outputs.immutable_image }}
-        JOIN_TOKEN_SECRET: ${{ inputs.join_token_secret }}
-        PROJECT_SLUG: ${{ inputs.project_slug }}
-        RUNNER_CONFIG_PATH: ${{ inputs.runner_config_path }}
-        RUNNER_HOME: ${{ runner.temp }}/polycore-runner-metadata
-        RUNNER_ID: ${{ inputs.runner_id }}
-        SIGNING_SECRET_SECRET: ${{ inputs.signing_secret_secret }}
-      run: |
-        set -euo pipefail
-        mkdir -p "${RUNNER_HOME}"
-        python3 - "${EXTRA_SECRETS}" "${RUNNER_HOME}/extra-secrets" <<'PY'
-        import base64, json, sys
-        items = json.loads(sys.argv[1])
-        with open(sys.argv[2], "w", encoding="utf-8") as output:
-            for item in items:
-                secret = base64.b64encode(item["secret"].encode()).decode()
-                env = base64.b64encode(item["env"].encode()).decode()
-                output.write(f"{secret} {env}\n")
-        PY
-        python3 - "${EXTRA_ENV}" "${RUNNER_HOME}/extra-env" <<'PY'
-        import base64, json, sys
-        items = json.loads(sys.argv[1])
-        with open(sys.argv[2], "w", encoding="utf-8") as output:
-            for key, value in items.items():
-                encoded_key = base64.b64encode(key.encode()).decode()
-                encoded_value = base64.b64encode(str(value).encode()).decode()
-                output.write(f"{encoded_key} {encoded_value}\n")
-        PY
-        METADATA="host-project=${HOST_PROJECT},runner-image=${IMAGE},control-plane-ws=${CONTROL_PLANE_WS},runner-id=${RUNNER_ID},runner-config-path=${RUNNER_CONFIG_PATH},polycore-project-slug=${PROJECT_SLUG},google-cloud-project=${HOST_PROJECT},container-name=${CONTAINER_NAME},health-check-port=${HEALTH_CHECK_PORT},secret-join-token=${JOIN_TOKEN_SECRET},secret-signing-secret=${SIGNING_SECRET_SECRET},google-logging-enabled=true,google-monitoring-enabled=true"
-        {
-          echo "metadata=${METADATA}"
-          echo "metadata_dir=${RUNNER_HOME}"
-        } >> "${GITHUB_OUTPUT}"
-
-    - name: Create immutable COS instance template
-      if: ${{ inputs.mode != 'teardown' }}
-      shell: bash
-      env:
-        HEALTH_TAG: ${{ inputs.vm_name }}-health-check
-        MACHINE_TYPE: ${{ inputs.machine_type }}
-        METADATA: ${{ steps.metadata.outputs.metadata }}
-        METADATA_DIR: ${{ steps.metadata.outputs.metadata_dir }}
-        NETWORK: ${{ inputs.network }}
         PROJECT: ${{ inputs.project }}
-        STARTUP_SCRIPT: ${{ github.action_path }}/vm-startup.sh
-        TEMPLATE_NAME: ${{ steps.release.outputs.template_name }}
-        VM_NAME: ${{ inputs.vm_name }}
-        VM_SA: ${{ steps.release.outputs.vm_sa }}
-      run: |
-        set -euo pipefail
-        gcloud compute instance-templates create "${TEMPLATE_NAME}" \
-          --project="${PROJECT}" \
-          --machine-type="${MACHINE_TYPE}" \
-          --network="${NETWORK}" \
-          --image-family=cos-stable \
-          --image-project=cos-cloud \
-          --boot-disk-size=20GB \
-          --maintenance-policy=MIGRATE \
-          --scopes=cloud-platform \
-          --service-account="${VM_SA}" \
-          --tags="${HEALTH_TAG}" \
-          --labels="polycore-runner=${VM_NAME}" \
-          --metadata="${METADATA}" \
-          --metadata-from-file="startup-script=${STARTUP_SCRIPT},extra-secrets=${METADATA_DIR}/extra-secrets,extra-env=${METADATA_DIR}/extra-env"
-
-    - name: Provision or roll out runner MIG
-      if: ${{ inputs.mode != 'teardown' }}
-      shell: bash
-      env:
-        HEALTH_CHECK: ${{ steps.release.outputs.health_check }}
-        INITIAL_DELAY: ${{ inputs.health_initial_delay }}
-        MIN_READY: ${{ inputs.min_ready }}
-        MODE: ${{ inputs.mode }}
-        PROJECT: ${{ inputs.project }}
-        TEMPLATE_NAME: ${{ steps.release.outputs.template_name }}
-        VM_NAME: ${{ inputs.vm_name }}
+        RUNNER_NAME: ${{ inputs.runner_name }}
         ZONE: ${{ inputs.zone }}
       run: |
         set -euo pipefail
-        if gcloud compute instance-groups managed describe "${VM_NAME}" --zone="${ZONE}" --project="${PROJECT}" >/dev/null 2>&1; then
-          echo "Rolling MIG ${VM_NAME} to ${TEMPLATE_NAME}."
-          gcloud beta compute instance-groups managed rolling-action start-update "${VM_NAME}" \
-            --project="${PROJECT}" --zone="${ZONE}" \
-            --version="template=${TEMPLATE_NAME}" \
-            --type=proactive --minimal-action=replace --replacement-method=substitute \
-            --max-surge=1 --max-unavailable=0 --min-ready="${MIN_READY}"
-        elif [[ "${MODE}" == "rollout" ]]; then
-          echo "error: MIG ${VM_NAME} not found; run mode=provision first" >&2
+        if ! gcloud compute instance-groups managed describe "${RUNNER_NAME}" \
+          --project="${PROJECT}" --zone="${ZONE}" >/dev/null 2>&1; then
+          echo "error: MIG ${RUNNER_NAME} not found; apply the Terraform module first" >&2
           exit 1
-        else
-          gcloud compute health-checks describe "${HEALTH_CHECK}" --project="${PROJECT}" >/dev/null
-          gcloud compute instance-groups managed create "${VM_NAME}" \
-            --project="${PROJECT}" --zone="${ZONE}" \
-            --base-instance-name="${VM_NAME}" --size=1 \
-            --template="${TEMPLATE_NAME}" \
-            --health-check="${HEALTH_CHECK}" --initial-delay="${INITIAL_DELAY}" \
-            --action-on-vm-failed-health-check=do-nothing \
-            --update-policy-type=proactive \
-            --update-policy-max-surge=1 --update-policy-max-unavailable=0 \
-            --update-policy-minimal-action=replace \
-            --update-policy-replacement-method=substitute
         fi
-        gcloud compute instance-groups managed wait-until "${VM_NAME}" \
-          --project="${PROJECT}" --zone="${ZONE}" --version-target-reached --timeout=900
-        gcloud compute instance-groups managed wait-until "${VM_NAME}" \
+        gcloud compute instance-groups managed rolling-action replace "${RUNNER_NAME}" \
+          --project="${PROJECT}" --zone="${ZONE}" \
+          --replacement-method=substitute \
+          --max-surge=1 --max-unavailable=0 --min-ready=30s
+        gcloud compute instance-groups managed wait-until "${RUNNER_NAME}" \
           --project="${PROJECT}" --zone="${ZONE}" --stable --timeout=900
-        HEALTH="$(gcloud compute instance-groups managed list-instances "${VM_NAME}" \
+        HEALTH="$(gcloud compute instance-groups managed list-instances "${RUNNER_NAME}" \
           --project="${PROJECT}" --zone="${ZONE}" \
           --format='value(instanceHealth[0].detailedHealthState)')"
         if [[ "${HEALTH}" != "HEALTHY" ]]; then
           echo "error: runner MIG did not become healthy (state: ${HEALTH:-unknown})" >&2
           exit 1
-        fi
-        if gcloud compute instances describe "${VM_NAME}" --zone="${ZONE}" --project="${PROJECT}" >/dev/null 2>&1; then
-          echo "Deleting the healthy rollout's legacy standalone VM ${VM_NAME}."
-          gcloud compute instances delete "${VM_NAME}" --zone="${ZONE}" --project="${PROJECT}" --quiet
-        fi
-
-    - name: Tear down runner compute
-      if: ${{ inputs.mode == 'teardown' }}
-      shell: bash
-      env:
-        PROJECT: ${{ inputs.project }}
-        VM_NAME: ${{ inputs.vm_name }}
-        ZONE: ${{ inputs.zone }}
-      run: |
-        set -euo pipefail
-        if gcloud compute instance-groups managed describe "${VM_NAME}" --zone="${ZONE}" --project="${PROJECT}" >/dev/null 2>&1; then
-          gcloud compute instance-groups managed delete "${VM_NAME}" \
-            --zone="${ZONE}" --project="${PROJECT}" --quiet
-          echo "Deleted MIG ${VM_NAME}."
-        fi
-        if gcloud compute instances describe "${VM_NAME}" --zone="${ZONE}" --project="${PROJECT}" >/dev/null 2>&1; then
-          gcloud compute instances delete "${VM_NAME}" \
-            --zone="${ZONE}" --project="${PROJECT}" --quiet
-          echo "Deleted legacy VM ${VM_NAME}."
         fi

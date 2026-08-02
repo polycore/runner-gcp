@@ -47,6 +47,20 @@ fetch_secret() {
   printf '%s' "${encoded}" | base64 -d
 }
 
+wait_for_secret() {
+  local secret_id="$1" value attempt
+  for attempt in $(seq 1 60); do
+    if value="$(fetch_secret "${secret_id}" 2>/dev/null)" && [[ -n "${value}" ]]; then
+      printf '%s' "${value}"
+      return
+    fi
+    echo "Secret ${secret_id} is not available yet; retrying in 10 seconds (${attempt}/60)." >&2
+    sleep 10
+  done
+  echo "Secret ${secret_id} was not available after 60 attempts." >&2
+  return 1
+}
+
 decode() { printf '%s' "$1" | base64 -d; }
 
 echo "--- configuring Artifact Registry authentication ---"
@@ -61,8 +75,8 @@ for source_range in 130.211.0.0/22 35.191.0.0/16; do
 done
 
 echo "--- reading runner secrets ---"
-JOIN_TOKEN="$(fetch_secret "${SECRET_JOIN_TOKEN}")"
-SIGNING_SECRET="$(fetch_secret "${SECRET_SIGNING_SECRET}")"
+JOIN_TOKEN="$(wait_for_secret "${SECRET_JOIN_TOKEN}")"
+SIGNING_SECRET="$(wait_for_secret "${SECRET_SIGNING_SECRET}")"
 
 DOCKER_ENV=(
   -e "PORT=${HEALTH_CHECK_PORT}"
@@ -79,7 +93,7 @@ while read -r encoded_secret encoded_env; do
   [ -z "${encoded_secret}" ] && continue
   secret_id="$(decode "${encoded_secret}")"
   env_name="$(decode "${encoded_env}")"
-  value="$(fetch_secret "${secret_id}")"
+  value="$(wait_for_secret "${secret_id}")"
   DOCKER_ENV+=(-e "${env_name}=${value}")
   echo "--- loaded secret ${secret_id} -> ${env_name} ---"
 done <<< "${EXTRA_SECRETS}"
@@ -92,7 +106,17 @@ while read -r encoded_key encoded_value; do
 done <<< "${EXTRA_ENV}"
 
 echo "--- pulling ${RUNNER_IMAGE} ---"
-docker pull "${RUNNER_IMAGE}"
+for attempt in $(seq 1 60); do
+  if docker pull "${RUNNER_IMAGE}"; then
+    break
+  fi
+  if [[ "${attempt}" == "60" ]]; then
+    echo "Failed to pull ${RUNNER_IMAGE} after ${attempt} attempts." >&2
+    exit 1
+  fi
+  echo "Image is not available yet; retrying in 10 seconds (${attempt}/60)."
+  sleep 10
+done
 
 echo "--- starting runner container (${CONTAINER_NAME}) ---"
 docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true

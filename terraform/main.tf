@@ -1,196 +1,175 @@
-# Opinionated GCP install for a Polycore runner.
+# Opinionated GCP deployment for one Polycore runner.
 #
-# Public module: https://github.com/polycore/runner-gcp
-#
-#   module "polycore_runner" {
-#     source = "git::https://github.com/polycore/runner-gcp.git//terraform?ref=v0.2.0"
-#     project_id = "acme-prod"
-#   }
+# Terraform owns the complete, stable runtime: Artifact Registry, IAM, secrets,
+# health checking, the COS instance template, and the managed instance group.
+# CI only publishes IMAGE:VERSION, moves IMAGE:live, and rolls the MIG.
 
 terraform {
   required_version = ">= 1.5.0"
   required_providers {
     google = {
       source  = "hashicorp/google"
-      version = ">= 5.0"
+      version = ">= 7.0"
     }
   }
 }
 
 variable "project_id" {
-  description = "GCP project that hosts the runner MIG and image registry."
+  description = "GCP project that hosts the runner."
   type        = string
 }
 
 variable "region" {
-  description = "Region for Artifact Registry."
+  description = "Artifact Registry and VM region."
   type        = string
   default     = "europe-west1"
 }
 
+variable "zone" {
+  description = "Zone for the runner MIG. Defaults to the region's b zone."
+  type        = string
+  default     = null
+  nullable    = true
+}
+
 variable "runner_name" {
-  description = "Stable name shared by the runner MIG, health check, and network tag."
+  description = "Stable prefix for runner resources."
   type        = string
   default     = "polycore-runner"
 
   validation {
-    condition     = length(var.runner_name) <= 40 && can(regex("^[a-z]([-a-z0-9]*[a-z0-9])?$", var.runner_name))
-    error_message = "runner_name must be a valid GCE name of at most 40 characters."
+    condition     = length(var.runner_name) >= 3 && length(var.runner_name) <= 23 && can(regex("^[a-z]([-a-z0-9]*[a-z0-9])?$", var.runner_name))
+    error_message = "runner_name must be a valid 3 to 23 character GCE name."
   }
 }
 
+variable "image_name" {
+  description = "Docker image name inside the module-managed Artifact Registry repository."
+  type        = string
+  default     = "runner"
+
+  validation {
+    condition     = can(regex("^[a-z0-9][a-z0-9._-]*$", var.image_name))
+    error_message = "image_name must be a valid Docker image name without a tag."
+  }
+}
+
+variable "runner_id" {
+  description = "Control-plane runner id returned by enrollment."
+  type        = string
+}
+
+variable "project_slug" {
+  description = "Polycore project slug served by this runner."
+  type        = string
+}
+
 variable "network" {
-  description = "VPC network where the runner MIG is created."
+  description = "VPC network used by the runner VM."
   type        = string
   default     = "default"
 }
 
-variable "vm_service_account_id" {
-  description = "Account id for the dedicated runner VM service account."
+variable "machine_type" {
+  description = "Compute Engine machine type."
   type        = string
-  default     = "polycore-runner-vm"
-
-  validation {
-    condition     = can(regex("^[a-z][a-z0-9-]{4,28}[a-z0-9]$", var.vm_service_account_id))
-    error_message = "vm_service_account_id must be a valid 6 to 30 character service-account id."
-  }
+  default     = "e2-micro"
 }
 
-variable "health_check_port" {
-  description = "Port exposed only to Google Cloud health check probes."
-  type        = number
-  default     = 8080
+variable "control_plane_ws" {
+  description = "Control-plane WebSocket URL."
+  type        = string
+  default     = "wss://cp.polycore.ai/runner"
+}
 
-  validation {
-    condition     = floor(var.health_check_port) == var.health_check_port && var.health_check_port >= 1 && var.health_check_port <= 65535
-    error_message = "health_check_port must be an integer between 1 and 65535."
-  }
+variable "runner_config_path" {
+  description = "Path to polycore.json inside the runner image."
+  type        = string
+  default     = "/app/integration/polycore.json"
+}
+
+variable "container_name" {
+  description = "Docker container name. Defaults to runner_name."
+  type        = string
+  default     = null
+  nullable    = true
 }
 
 variable "enable_firestore" {
-  description = "Grant the VM SA roles/datastore.user for Firestore via ADC."
+  description = "Grant the runner VM service account roles/datastore.user."
   type        = bool
   default     = true
 }
 
 variable "enable_firebase_auth" {
-  description = "Grant the VM SA roles/firebaseauth.admin (e.g. listUsers in actions)."
+  description = "Grant the runner VM service account roles/firebaseauth.admin."
   type        = bool
   default     = false
 }
 
-variable "extra_secret_ids" {
-  description = "Existing Secret Manager secret ids the VM SA may read (e.g. RC_SECRET_V2_API_KEY)."
-  type        = list(string)
-  default     = []
-}
-
 variable "join_token_secret_id" {
-  description = "Secret Manager id for the enrollment join-token shell this module creates."
+  description = "Secret Manager id for the enrollment join-token shell."
   type        = string
   default     = "POLYCORE_JOIN_TOKEN"
 }
 
 variable "signing_secret_secret_id" {
-  description = "Secret Manager id for the enrollment signing-secret shell this module creates."
+  description = "Secret Manager id for the enrollment signing-secret shell."
   type        = string
   default     = "POLYCORE_SIGNING_SECRET"
+}
+
+variable "extra_secrets" {
+  description = "Additional container environment variable to Secret Manager id mappings."
+  type        = map(string)
+  default     = {}
+}
+
+variable "extra_env" {
+  description = "Additional non-secret container environment variables."
+  type        = map(string)
+  default     = {}
+}
+
+locals {
+  zone                  = coalesce(var.zone, "${var.region}-b")
+  container_name        = coalesce(var.container_name, var.runner_name)
+  vm_service_account_id = "${var.runner_name}-vm"
+  deploy_account_id     = "${var.runner_name}-deploy"
+  health_check_port     = 8080
+  health_check_tag      = "${var.runner_name}-health-check"
+
+  image_repository = "${var.region}-docker.pkg.dev/${var.project_id}/polycore/${var.image_name}"
+  live_image       = "${local.image_repository}:live"
+
+  encoded_extra_secrets = join("\n", [
+    for env_name, secret_id in var.extra_secrets :
+    "${base64encode(secret_id)} ${base64encode(env_name)}"
+  ])
+  encoded_extra_env = join("\n", [
+    for env_name, value in var.extra_env :
+    "${base64encode(env_name)} ${base64encode(value)}"
+  ])
 }
 
 # ---------------------------------------------------------------------------
 # APIs
 # ---------------------------------------------------------------------------
 
-resource "google_project_service" "cloud_resource_manager" {
+resource "google_project_service" "services" {
+  for_each = toset([
+    "artifactregistry.googleapis.com",
+    "cloudresourcemanager.googleapis.com",
+    "compute.googleapis.com",
+    "iam.googleapis.com",
+    "logging.googleapis.com",
+    "monitoring.googleapis.com",
+    "secretmanager.googleapis.com",
+  ])
+
   project            = var.project_id
-  service            = "cloudresourcemanager.googleapis.com"
+  service            = each.value
   disable_on_destroy = false
-}
-
-resource "google_project_service" "compute" {
-  project            = var.project_id
-  service            = "compute.googleapis.com"
-  disable_on_destroy = false
-
-  depends_on = [google_project_service.cloud_resource_manager]
-}
-
-resource "google_project_service" "artifact_registry" {
-  project            = var.project_id
-  service            = "artifactregistry.googleapis.com"
-  disable_on_destroy = false
-
-  depends_on = [google_project_service.cloud_resource_manager]
-}
-
-resource "google_project_service" "secret_manager" {
-  project            = var.project_id
-  service            = "secretmanager.googleapis.com"
-  disable_on_destroy = false
-
-  depends_on = [google_project_service.cloud_resource_manager]
-}
-
-resource "google_project_service" "iam" {
-  project            = var.project_id
-  service            = "iam.googleapis.com"
-  disable_on_destroy = false
-
-  depends_on = [google_project_service.cloud_resource_manager]
-}
-
-resource "google_project_service" "logging" {
-  project            = var.project_id
-  service            = "logging.googleapis.com"
-  disable_on_destroy = false
-
-  depends_on = [google_project_service.cloud_resource_manager]
-}
-
-resource "google_project_service" "monitoring" {
-  project            = var.project_id
-  service            = "monitoring.googleapis.com"
-  disable_on_destroy = false
-
-  depends_on = [google_project_service.cloud_resource_manager]
-}
-
-# ---------------------------------------------------------------------------
-# Runner health check
-# ---------------------------------------------------------------------------
-
-resource "google_compute_health_check" "runner" {
-  project = var.project_id
-  name    = "${var.runner_name}-health"
-
-  check_interval_sec  = 10
-  timeout_sec         = 5
-  healthy_threshold   = 2
-  unhealthy_threshold = 6
-
-  http_health_check {
-    port         = var.health_check_port
-    request_path = "/health"
-  }
-
-  depends_on = [google_project_service.compute]
-}
-
-resource "google_compute_firewall" "runner_health_check" {
-  project = var.project_id
-  name    = "${var.runner_name}-allow-health-check"
-  network = var.network
-
-  direction     = "INGRESS"
-  source_ranges = ["130.211.0.0/22", "35.191.0.0/16"]
-  target_tags   = ["${var.runner_name}-health-check"]
-
-  allow {
-    protocol = "tcp"
-    ports    = [tostring(var.health_check_port)]
-  }
-
-  depends_on = [google_project_service.compute]
 }
 
 # ---------------------------------------------------------------------------
@@ -204,30 +183,34 @@ resource "google_artifact_registry_repository" "polycore" {
   description   = "Polycore runner images"
   format        = "DOCKER"
 
-  depends_on = [google_project_service.artifact_registry]
+  docker_config {
+    # Version tags are retained while CI atomically moves the `live` tag.
+    immutable_tags = false
+  }
+
+  depends_on = [google_project_service.services["artifactregistry.googleapis.com"]]
 }
 
 # ---------------------------------------------------------------------------
-# Service accounts
+# Service accounts and IAM
 # ---------------------------------------------------------------------------
 
 resource "google_service_account" "runner" {
   project      = var.project_id
-  account_id   = var.vm_service_account_id
+  account_id   = local.vm_service_account_id
   display_name = "Polycore runner VM"
   description  = "Runtime identity for the customer-hosted Polycore runner"
 
-  depends_on = [google_project_service.iam]
+  depends_on = [google_project_service.services["iam.googleapis.com"]]
 }
 
-# CI only: push images and manage the MIG. It has no datastore access.
 resource "google_service_account" "deploy" {
   project      = var.project_id
-  account_id   = "polycore-runner-deploy"
+  account_id   = local.deploy_account_id
   display_name = "Polycore runner CI deploy"
-  description  = "Pushes runner images and rolls the runner MIG (no datastore access)"
+  description  = "Publishes runner images and rolls the runner MIG"
 
-  depends_on = [google_project_service.iam]
+  depends_on = [google_project_service.services["iam.googleapis.com"]]
 }
 
 resource "google_project_iam_member" "deploy_ar_writer" {
@@ -241,53 +224,47 @@ resource "google_project_iam_member" "deploy_compute_admin" {
   role    = "roles/compute.instanceAdmin.v1"
   member  = "serviceAccount:${google_service_account.deploy.email}"
 
-  depends_on = [google_project_service.compute]
+  depends_on = [google_project_service.services["compute.googleapis.com"]]
 }
 
-resource "google_service_account_iam_member" "deploy_act_as_vm" {
+resource "google_service_account_iam_member" "deploy_act_as_runner" {
   service_account_id = google_service_account.runner.name
   role               = "roles/iam.serviceAccountUser"
   member             = "serviceAccount:${google_service_account.deploy.email}"
-
-  depends_on = [google_project_service.compute]
 }
 
-# ---------------------------------------------------------------------------
-# Runner VM SA: pull images + ADC to data (optional) + read secrets
-# ---------------------------------------------------------------------------
-
-resource "google_project_iam_member" "vm_ar_reader" {
+resource "google_project_iam_member" "runner_ar_reader" {
   project = var.project_id
   role    = "roles/artifactregistry.reader"
   member  = "serviceAccount:${google_service_account.runner.email}"
 
-  depends_on = [google_project_service.artifact_registry, google_project_service.compute]
+  depends_on = [google_artifact_registry_repository.polycore]
 }
 
-resource "google_project_iam_member" "vm_log_writer" {
+resource "google_project_iam_member" "runner_log_writer" {
   project = var.project_id
   role    = "roles/logging.logWriter"
   member  = "serviceAccount:${google_service_account.runner.email}"
 
-  depends_on = [google_project_service.logging]
+  depends_on = [google_project_service.services["logging.googleapis.com"]]
 }
 
-resource "google_project_iam_member" "vm_metric_writer" {
+resource "google_project_iam_member" "runner_metric_writer" {
   project = var.project_id
   role    = "roles/monitoring.metricWriter"
   member  = "serviceAccount:${google_service_account.runner.email}"
 
-  depends_on = [google_project_service.monitoring]
+  depends_on = [google_project_service.services["monitoring.googleapis.com"]]
 }
 
-resource "google_project_iam_member" "vm_datastore_user" {
+resource "google_project_iam_member" "runner_datastore_user" {
   count   = var.enable_firestore ? 1 : 0
   project = var.project_id
   role    = "roles/datastore.user"
   member  = "serviceAccount:${google_service_account.runner.email}"
 }
 
-resource "google_project_iam_member" "vm_firebase_auth_admin" {
+resource "google_project_iam_member" "runner_firebase_auth_admin" {
   count   = var.enable_firebase_auth ? 1 : 0
   project = var.project_id
   role    = "roles/firebaseauth.admin"
@@ -295,7 +272,7 @@ resource "google_project_iam_member" "vm_firebase_auth_admin" {
 }
 
 # ---------------------------------------------------------------------------
-# Enrollment secret shells (values added out-of-band after enroll)
+# Secrets
 # ---------------------------------------------------------------------------
 
 resource "google_secret_manager_secret" "join_token" {
@@ -306,7 +283,7 @@ resource "google_secret_manager_secret" "join_token" {
     auto {}
   }
 
-  depends_on = [google_project_service.secret_manager]
+  depends_on = [google_project_service.services["secretmanager.googleapis.com"]]
 }
 
 resource "google_secret_manager_secret" "signing_secret" {
@@ -317,46 +294,199 @@ resource "google_secret_manager_secret" "signing_secret" {
     auto {}
   }
 
-  depends_on = [google_project_service.secret_manager]
+  depends_on = [google_project_service.services["secretmanager.googleapis.com"]]
 }
 
-resource "google_secret_manager_secret_iam_member" "vm_join_token" {
+resource "google_secret_manager_secret_iam_member" "runner_join_token" {
   secret_id = google_secret_manager_secret.join_token.id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.runner.email}"
 }
 
-resource "google_secret_manager_secret_iam_member" "vm_signing_secret" {
+resource "google_secret_manager_secret_iam_member" "runner_signing_secret" {
   secret_id = google_secret_manager_secret.signing_secret.id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.runner.email}"
 }
 
-resource "google_secret_manager_secret_iam_member" "vm_extra_secrets" {
-  for_each  = toset(var.extra_secret_ids)
+resource "google_secret_manager_secret_iam_member" "runner_extra_secrets" {
+  for_each  = toset(values(var.extra_secrets))
   secret_id = "projects/${var.project_id}/secrets/${each.value}"
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.runner.email}"
 
-  depends_on = [google_project_service.secret_manager]
+  depends_on = [google_project_service.services["secretmanager.googleapis.com"]]
+}
+
+# ---------------------------------------------------------------------------
+# Health check and restricted ingress
+# ---------------------------------------------------------------------------
+
+resource "google_compute_health_check" "runner" {
+  project = var.project_id
+  name    = "${var.runner_name}-health"
+
+  check_interval_sec  = 10
+  timeout_sec         = 5
+  healthy_threshold   = 2
+  unhealthy_threshold = 6
+
+  http_health_check {
+    port         = local.health_check_port
+    request_path = "/health"
+  }
+
+  depends_on = [google_project_service.services["compute.googleapis.com"]]
+}
+
+resource "google_compute_firewall" "runner_health_check" {
+  project = var.project_id
+  name    = "${var.runner_name}-allow-health-check"
+  network = var.network
+
+  direction     = "INGRESS"
+  source_ranges = ["130.211.0.0/22", "35.191.0.0/16"]
+  target_tags   = [local.health_check_tag]
+
+  allow {
+    protocol = "tcp"
+    ports    = [tostring(local.health_check_port)]
+  }
+
+  depends_on = [google_project_service.services["compute.googleapis.com"]]
+}
+
+# ---------------------------------------------------------------------------
+# COS instance template and managed instance group
+# ---------------------------------------------------------------------------
+
+data "google_compute_image" "cos" {
+  family  = "cos-stable"
+  project = "cos-cloud"
+}
+
+resource "google_compute_instance_template" "runner" {
+  project      = var.project_id
+  name_prefix  = "${var.runner_name}-"
+  description  = "Polycore runner on Container-Optimized OS"
+  machine_type = var.machine_type
+  tags         = [local.health_check_tag]
+
+  labels = {
+    polycore-runner = var.runner_name
+  }
+
+  disk {
+    source_image = data.google_compute_image.cos.self_link
+    auto_delete  = true
+    boot         = true
+    disk_size_gb = 20
+  }
+
+  network_interface {
+    network = var.network
+    access_config {}
+  }
+
+  service_account {
+    email  = google_service_account.runner.email
+    scopes = ["cloud-platform"]
+  }
+
+  scheduling {
+    automatic_restart   = true
+    on_host_maintenance = "MIGRATE"
+  }
+
+  metadata = {
+    host-project              = var.project_id
+    runner-image              = local.live_image
+    control-plane-ws          = var.control_plane_ws
+    runner-id                 = var.runner_id
+    runner-config-path        = var.runner_config_path
+    polycore-project-slug     = var.project_slug
+    google-cloud-project      = var.project_id
+    container-name            = local.container_name
+    health-check-port         = tostring(local.health_check_port)
+    secret-join-token         = var.join_token_secret_id
+    secret-signing-secret     = var.signing_secret_secret_id
+    extra-secrets             = local.encoded_extra_secrets
+    extra-env                 = local.encoded_extra_env
+    google-logging-enabled    = "true"
+    google-monitoring-enabled = "true"
+  }
+
+  metadata_startup_script = file("${path.module}/vm-startup.sh")
+
+  lifecycle {
+    create_before_destroy = true
+  }
+
+  depends_on = [
+    google_project_iam_member.runner_ar_reader,
+    google_secret_manager_secret_iam_member.runner_join_token,
+    google_secret_manager_secret_iam_member.runner_signing_secret,
+  ]
+}
+
+resource "google_compute_instance_group_manager" "runner" {
+  project            = var.project_id
+  zone               = local.zone
+  name               = var.runner_name
+  base_instance_name = var.runner_name
+  target_size        = 1
+
+  version {
+    instance_template = google_compute_instance_template.runner.id
+  }
+
+  auto_healing_policies {
+    health_check      = google_compute_health_check.runner.id
+    initial_delay_sec = 300
+  }
+
+  instance_lifecycle_policy {
+    # A control-plane outage cannot be repaired by recreating the runner VM.
+    on_failed_health_check = "DO_NOTHING"
+  }
+
+  update_policy {
+    type                           = "PROACTIVE"
+    minimal_action                 = "REPLACE"
+    most_disruptive_allowed_action = "REPLACE"
+    replacement_method             = "SUBSTITUTE"
+    max_surge_fixed                = 1
+    max_unavailable_fixed          = 0
+  }
+
+  # First apply can precede the first `live` image. Deployment CI performs the
+  # health-gated wait after publishing and rolling a release.
+  wait_for_instances = false
+
+  depends_on = [google_compute_firewall.runner_health_check]
 }
 
 # ---------------------------------------------------------------------------
 # Outputs
 # ---------------------------------------------------------------------------
 
-output "artifact_registry_repository" {
-  description = "Artifact Registry repository id (`polycore`)."
-  value       = google_artifact_registry_repository.polycore.repository_id
+output "image_repository" {
+  description = "Docker image repository without a tag."
+  value       = local.image_repository
 }
 
-output "image_host" {
-  description = "Docker host prefix for runner images."
-  value       = "${var.region}-docker.pkg.dev/${var.project_id}/polycore"
+output "live_image" {
+  description = "Mutable image reference pulled by runner VMs."
+  value       = local.live_image
+}
+
+output "managed_instance_group_name" {
+  description = "Runner managed instance group name."
+  value       = google_compute_instance_group_manager.runner.name
 }
 
 output "deploy_service_account_email" {
-  description = "CI deploy SA email (mint a key for GitHub Actions)."
+  description = "Service account used by deployment CI."
   value       = google_service_account.deploy.email
 }
 
@@ -373,14 +503,4 @@ output "join_token_secret_id" {
 output "signing_secret_secret_id" {
   description = "Secret Manager id for the enrollment signing secret."
   value       = google_secret_manager_secret.signing_secret.secret_id
-}
-
-output "health_check_name" {
-  description = "Health check attached to the runner MIG."
-  value       = google_compute_health_check.runner.name
-}
-
-output "health_check_port" {
-  description = "Runner health endpoint port."
-  value       = var.health_check_port
 }

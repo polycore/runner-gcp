@@ -12,7 +12,7 @@ cat > "${TMP}/bin/curl" <<'EOF'
 url="${!#}"
 case "${url}" in
   */attributes/host-project) printf 'acme-prod' ;;
-  */attributes/runner-image) printf 'europe-west1-docker.pkg.dev/acme-prod/polycore/runner@sha256:abc123' ;;
+  */attributes/runner-image) printf 'europe-west1-docker.pkg.dev/acme-prod/polycore/runner:live' ;;
   */attributes/control-plane-ws) printf 'wss://cp.example.test/runner' ;;
   */attributes/runner-id) printf 'rnr_test' ;;
   */attributes/runner-config-path) printf '/app/polycore.json' ;;
@@ -76,9 +76,9 @@ export COMMAND_LOG="${TMP}/commands.log"
 export PATH="${TMP}/bin:${PATH}"
 export POLYCORE_STARTUP_LOG="${TMP}/startup.log"
 
-bash "${ROOT}/.github/actions/deploy-runner-gcp/vm-startup.sh"
+bash "${ROOT}/terraform/vm-startup.sh"
 
-grep -Fq 'docker pull europe-west1-docker.pkg.dev/acme-prod/polycore/runner@sha256:abc123' "${COMMAND_LOG}"
+grep -Fq 'docker pull europe-west1-docker.pkg.dev/acme-prod/polycore/runner:live' "${COMMAND_LOG}"
 grep -Fq 'docker run -d --name polycore-runner --restart=always --network=host' "${COMMAND_LOG}"
 grep -Fq 'PORT=8080' "${COMMAND_LOG}"
 grep -Fq 'POLYCORE_JOIN_TOKEN=join-token' "${COMMAND_LOG}"

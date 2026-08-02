@@ -17,7 +17,7 @@ jobs:
 
       - name: Test COS startup script
         run: |
-          bash -n .github/actions/deploy-runner-gcp/vm-startup.sh
+          bash -n terraform/vm-startup.sh
           tests/vm-startup.test.sh
 
       - name: Validate Terraform
