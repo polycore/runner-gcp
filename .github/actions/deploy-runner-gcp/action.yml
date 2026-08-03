@@ -119,23 +119,23 @@ runs:
     - name: Roll runner MIG
       shell: bash
       env:
+        MIG_NAME: ${{ inputs.runner_name }}
         PROJECT: ${{ inputs.project }}
-        RUNNER_NAME: ${{ inputs.runner_name }}
         ZONE: ${{ inputs.zone }}
       run: |
         set -euo pipefail
-        if ! gcloud compute instance-groups managed describe "${RUNNER_NAME}" \
+        if ! gcloud compute instance-groups managed describe "${MIG_NAME}" \
           --project="${PROJECT}" --zone="${ZONE}" >/dev/null 2>&1; then
-          echo "error: MIG ${RUNNER_NAME} not found; apply the Terraform module first" >&2
+          echo "error: MIG ${MIG_NAME} not found; apply the Terraform module first" >&2
           exit 1
         fi
-        gcloud compute instance-groups managed rolling-action replace "${RUNNER_NAME}" \
+        gcloud compute instance-groups managed rolling-action replace "${MIG_NAME}" \
           --project="${PROJECT}" --zone="${ZONE}" \
           --replacement-method=substitute \
           --max-surge=1 --max-unavailable=0 --min-ready=30s
-        gcloud compute instance-groups managed wait-until "${RUNNER_NAME}" \
+        gcloud compute instance-groups managed wait-until "${MIG_NAME}" \
           --project="${PROJECT}" --zone="${ZONE}" --stable --timeout=900
-        HEALTH="$(gcloud compute instance-groups managed list-instances "${RUNNER_NAME}" \
+        HEALTH="$(gcloud compute instance-groups managed list-instances "${MIG_NAME}" \
           --project="${PROJECT}" --zone="${ZONE}" \
           --format='value(instanceHealth[0].detailedHealthState)')"
         if [[ "${HEALTH}" != "HEALTHY" ]]; then
