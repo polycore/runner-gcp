@@ -75,6 +75,7 @@ chmod +x "${TMP}/bin/"*
 export COMMAND_LOG="${TMP}/commands.log"
 export PATH="${TMP}/bin:${PATH}"
 export POLYCORE_STARTUP_LOG="${TMP}/startup.log"
+export POLYCORE_STATE_DIR="${TMP}/state"
 
 bash "${ROOT}/terraform/vm-startup.sh"
 

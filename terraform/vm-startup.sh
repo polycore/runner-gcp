@@ -2,6 +2,7 @@
 
 set -euo pipefail
 STARTUP_LOG="${POLYCORE_STARTUP_LOG:-/var/log/polycore-runner-startup.log}"
+STATE_DIR="${POLYCORE_STATE_DIR:-/var/lib/polycore-runner}"
 exec > >(tee -a "${STARTUP_LOG}") 2>&1
 echo "=== polycore runner startup $(date -u +%FT%TZ) ==="
 
@@ -61,7 +62,8 @@ wait_for_secret() {
 decode() { printf '%s' "$1" | base64 -d; }
 
 echo "--- configuring Artifact Registry authentication ---"
-export HOME=/root
+export HOME="${STATE_DIR}"
+mkdir -p "${HOME}"
 REGISTRY_HOST="${RUNNER_IMAGE%%/*}"
 docker-credential-gcr configure-docker --registries "${REGISTRY_HOST}"
 
