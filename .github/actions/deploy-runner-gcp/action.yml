@@ -64,8 +64,9 @@ runs:
           echo "error: version must be immutable and cannot be live" >&2
           exit 1
         fi
-        if [[ ! "${RUNNER_NAME}" =~ ^[a-z]([-a-z0-9]*[a-z0-9])?$ ]]; then
-          echo "error: runner_name must be a valid GCE name" >&2
+        if (( ${#RUNNER_NAME} < 3 || ${#RUNNER_NAME} > 23 )) || \
+          [[ ! "${RUNNER_NAME}" =~ ^[a-z][a-z0-9-]*[a-z0-9]$ ]]; then
+          echo "error: runner_name must be a valid 3 to 23 character GCE name" >&2
           exit 1
         fi
 
