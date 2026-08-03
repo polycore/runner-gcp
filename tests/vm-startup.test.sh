@@ -15,7 +15,6 @@ case "${url}" in
   */attributes/runner-image) printf 'europe-west1-docker.pkg.dev/acme-prod/polycore/runner:live' ;;
   */attributes/control-plane-ws) printf 'wss://cp.example.test/runner' ;;
   */attributes/runner-id) printf 'rnr_test' ;;
-  */attributes/runner-config-path) printf '/app/polycore.json' ;;
   */attributes/polycore-project-slug) printf 'acme-prod' ;;
   */attributes/google-cloud-project) printf 'acme-prod' ;;
   */attributes/container-name) printf 'polycore-runner' ;;
@@ -84,8 +83,13 @@ grep -Fq 'docker run -d --name polycore-runner --restart=always --network=host' 
 grep -Fq 'PORT=8080' "${COMMAND_LOG}"
 grep -Fq 'POLYCORE_JOIN_TOKEN=join-token' "${COMMAND_LOG}"
 grep -Fq 'POLYCORE_SIGNING_SECRET=signing-value' "${COMMAND_LOG}"
+if grep -Fq 'POLYCORE_RUNNER_CONFIG' "${COMMAND_LOG}"; then
+  exit 1
+fi
 grep -Fq 'API_KEY=api-value' "${COMMAND_LOG}"
 grep -Fq 'PLAIN_VALUE=hello\ world' "${COMMAND_LOG}"
 grep -Fq 'iptables -I INPUT -p tcp -s 130.211.0.0/22 --dport 8080 -j ACCEPT' "${COMMAND_LOG}"
+grep -Fq 'CMD ["node_modules/.bin/polycore-runner", "connect", "--config", "/app/integration/polycore.json"]' \
+  "${ROOT}/Dockerfile.example"
 
 echo "vm-startup.sh test passed"

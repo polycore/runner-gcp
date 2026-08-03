@@ -11,4 +11,4 @@ COPY polycore.json /app/integration/polycore.json
 COPY context /app/integration/context
 COPY actions /app/integration/actions
 
-CMD ["node_modules/.bin/polycore-runner", "connect"]
+CMD ["node_modules/.bin/polycore-runner", "connect", "--config", "/app/integration/polycore.json"]

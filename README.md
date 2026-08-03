@@ -41,8 +41,7 @@ module "polycore_runner" {
 ```
 
 `runner_name` defaults to `polycore-runner`. The module also supports custom
-secret IDs, plain environment variables, machine type, network, container name,
-and control-plane URL.
+secret IDs, plain environment variables, machine type, and network.
 
 Apply Terraform, then add the enrollment secret versions:
 
@@ -75,8 +74,10 @@ Authenticate as the module's `deploy_service_account_email`, then deploy:
     integration_dir: polycore-runner
 ```
 
-The image must use a runner SDK version whose `GET /health` returns `200` only
-while the runner has an active control-plane session. Terraform restricts the
+The image owns its filesystem layout and must pass its `polycore.json` path to
+`polycore-runner connect --config`. It must use a runner SDK version whose
+`GET /health` returns `200` only while the runner has an active control-plane
+session. Terraform restricts the
 health endpoint to Google Cloud health probes. Failed application health checks
 do not recreate the VM because a control-plane outage cannot be repaired from
 the customer project.

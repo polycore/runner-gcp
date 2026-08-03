@@ -70,25 +70,6 @@ variable "machine_type" {
   default     = "e2-micro"
 }
 
-variable "control_plane_ws" {
-  description = "Control-plane WebSocket URL."
-  type        = string
-  default     = "wss://cp.polycore.ai/runner"
-}
-
-variable "runner_config_path" {
-  description = "Path to polycore.json inside the runner image."
-  type        = string
-  default     = "/app/integration/polycore.json"
-}
-
-variable "container_name" {
-  description = "Docker container name. Defaults to runner_name."
-  type        = string
-  default     = null
-  nullable    = true
-}
-
 variable "enable_firestore" {
   description = "Grant the runner VM service account roles/datastore.user."
   type        = bool
@@ -127,7 +108,6 @@ variable "extra_env" {
 
 locals {
   zone                  = coalesce(var.zone, "${var.region}-b")
-  container_name        = coalesce(var.container_name, var.runner_name)
   vm_service_account_id = "${var.runner_name}-vm"
   deploy_account_id     = "${var.runner_name}-deploy"
   health_check_port     = 8080
@@ -388,12 +368,11 @@ resource "google_compute_instance_template" "runner" {
   metadata = {
     host-project              = var.project_id
     runner-image              = local.live_image
-    control-plane-ws          = var.control_plane_ws
+    control-plane-ws          = "wss://cp.polycore.ai/runner"
     runner-id                 = var.runner_id
-    runner-config-path        = var.runner_config_path
     polycore-project-slug     = var.project_slug
     google-cloud-project      = var.project_id
-    container-name            = local.container_name
+    container-name            = var.runner_name
     health-check-port         = tostring(local.health_check_port)
     secret-join-token         = var.join_token_secret_id
     secret-signing-secret     = var.signing_secret_secret_id
