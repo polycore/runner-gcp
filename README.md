@@ -1,88 +1,96 @@
-# Polycore runner - GCP preset
+# Polycore runner: GCP preset
 
-Public install path for a customer-hosted [Polycore](https://polycore.ai) runner
-on Google Cloud. **This repo is the only thing customers need from GitHub** for
-GCP deploy. You never need access to Polycore's private application monorepo.
+Deploy a customer-hosted [Polycore](https://polycore.ai) runner on Google Cloud.
+Terraform owns the infrastructure; the GitHub Action owns image releases.
 
-Contains:
+The runtime uses a size-one managed instance group (MIG) on Container-Optimized
+OS. It does not use the deprecated Compute Engine container startup agent.
 
-- **Terraform module** (`terraform/`) - Artifact Registry, deploy SA, VM SA IAM
-  (ADC), enrollment secret shells
-- **GitHub Action** (`.github/actions/deploy-runner-gcp`) - build/push image,
-  provision / rollout / teardown the GCE VM
-- **Dockerfile.example** - reference customer image layout
+## Flow
 
-Your integration repo stays thin: `polycore.json`, `actions/`, `context/`,
-`Dockerfile`, pinned `@polycore/runner` on npm.
+1. Terraform creates Artifact Registry, IAM, Secret Manager bindings, the
+   health check, instance template, and MIG.
+2. CI builds and pushes `runner:<version>`, then moves `runner:live` to that
+   digest.
+3. CI performs a rolling replacement with one surge VM and zero unavailable
+   VMs. The old VM remains until the replacement is healthy.
 
-## Runtime contract
-
-Container env (what `@polycore/runner` reads):
-
-| Env | Purpose |
-| --- | --- |
-| `POLYCORE_RUNNER_CONFIG` | Path to baked `polycore.json` |
-| `POLYCORE_CONTROL_PLANE_URL` | `wss://cp.polycore.ai/runner` |
-| `POLYCORE_RUNNER_ID` | `rnr_…` from enroll |
-| `POLYCORE_JOIN_TOKEN` | Enrollment join token |
-| `POLYCORE_SIGNING_SECRET` | Enrollment signing secret |
-| `POLYCORE_PROJECT_SLUG` | Polycore project this runner serves |
-| `GOOGLE_CLOUD_PROJECT` | GCP project when Firestore queries are on |
-
-Credentials for Google APIs: **Application Default Credentials** (VM service
-account). No key files on the happy path.
-
-Secret Manager **resource ids** default to `POLYCORE_JOIN_TOKEN` /
-`POLYCORE_SIGNING_SECRET` (same strings as the container env names), but both
-the Terraform module and the deploy Action accept overrides when a host project
-already uses different secret ids. The startup script always maps whatever was
-fetched onto the fixed container env names above.
+The instance template always pulls `runner:live`. Rollback moves `live` to a
+previous version digest and repeats the rolling replacement.
 
 ## Terraform
 
 ```hcl
 module "polycore_runner" {
-  source = "git::https://github.com/polycore/runner-gcp.git//terraform?ref=v0.1.3"
+  source = "git::https://github.com/polycore/runner-gcp.git//terraform?ref=v0.2.0"
 
-  project_id     = "acme-prod"
-  project_number = "123456789012"
-  region         = "europe-west1"
+  project_id   = "acme-prod"
+  region       = "europe-west1"
+  zone         = "europe-west1-b"
+  image_name   = "runner"
+  runner_id    = "rnr_..."
+  project_slug = "acme-prod"
 
   enable_firestore     = true
   enable_firebase_auth = false
-  # extra_secret_ids = ["MY_API_KEY"]
-  # Optional: override Secret Manager ids for the enrollment shells
-  # join_token_secret_id     = "polycore-join-token"
-  # signing_secret_secret_id = "polycore-signing-secret"
+
+  extra_secrets = {
+    MY_API_KEY = "my-api-key"
+  }
 }
 ```
 
-Pin `ref` to a release tag. No Terraform Registry account required for git
-source. No company incorporation required.
+`runner_name` defaults to `polycore-runner`. The module also supports custom
+secret IDs, plain environment variables, machine type, and network.
+
+Apply Terraform, then add the enrollment secret versions:
+
+```sh
+printf '%s' '<joinToken>' | gcloud secrets versions add POLYCORE_JOIN_TOKEN \
+  --data-file=- --project=acme-prod
+printf '%s' '<signingSecret>' | gcloud secrets versions add POLYCORE_SIGNING_SECRET \
+  --data-file=- --project=acme-prod
+```
+
+The first VM waits for secret versions and `runner:live` if they are not yet
+available.
 
 ## GitHub Action
 
+Authenticate as the module's `deploy_service_account_email`, then deploy:
+
 ```yaml
+- uses: actions/checkout@v4
 - uses: google-github-actions/auth@v2
   with:
     credentials_json: ${{ secrets.POLYCORE_DEPLOY_SA_KEY }}
 - uses: google-github-actions/setup-gcloud@v2
-- uses: polycore/runner-gcp/.github/actions/deploy-runner-gcp@v0.1.3
+- uses: polycore/runner-gcp/.github/actions/deploy-runner-gcp@v0.2.0
   with:
-    mode: rollout          # or provision | teardown
     project: acme-prod
-    image: europe-west1-docker.pkg.dev/acme-prod/polycore/runner:latest
-    runner_id: ${{ vars.POLYCORE_RUNNER_ID }}
-    project_slug: acme-prod
-    integration_dir: polycore-integration
-    # Optional: Secret Manager ids (defaults match the Terraform shells)
-    # join_token_secret: polycore-join-token
-    # signing_secret_secret: polycore-signing-secret
+    zone: europe-west1-b
+    image: europe-west1-docker.pkg.dev/acme-prod/polycore/runner
+    version: 1.4.2
+    integration_dir: polycore-runner
 ```
 
-First boot: `mode: provision`. Later: `mode: rollout`.
+The image owns its filesystem layout and must pass its `polycore.json` path to
+`polycore-runner connect --config`. It must use a runner SDK version whose
+`GET /health` returns `200` only while the runner has an active control-plane
+session. Terraform restricts the
+health endpoint to Google Cloud health probes. Failed application health checks
+do not recreate the VM because a control-plane outage cannot be repaired from
+the customer project.
+
+Pin the Terraform module and Action to the same release tag.
+
+## Upgrading from v0.1
+
+Keep the existing Terraform state and review the upgrade plan. The v0.1 Action
+created a standalone VM that is outside the v0.2 module. Apply v0.2, stop that
+VM before the first v0.2 rollout so only one process uses the runner ID, then
+delete it after the MIG is healthy.
 
 ## License
 
-Apache-2.0 (install tooling only; the Polycore control plane and proprietary
-product remain separate).
+Apache-2.0.
