@@ -73,7 +73,30 @@ runs:
         REGISTRY_HOST="${IMAGE%%/*}"
         gcloud auth configure-docker "${REGISTRY_HOST}" --quiet
 
+    - name: Check immutable runner version
+      id: version
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+        VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        VERSION_IMAGE="${IMAGE}:${VERSION}"
+        set +e
+        RESULT="$(gcloud artifacts docker images describe "${VERSION_IMAGE}" --format='value(image_summary.digest)' 2>&1)"
+        STATUS=$?
+        set -e
+        if [[ "${STATUS}" == "0" ]]; then
+          echo "exists=true" >> "${GITHUB_OUTPUT}"
+        elif [[ "${RESULT}" == *"NOT_FOUND"* || "${RESULT}" == *"Image not found."* ]]; then
+          echo "exists=false" >> "${GITHUB_OUTPUT}"
+        else
+          echo "${RESULT}" >&2
+          exit "${STATUS}"
+        fi
+
     - name: Build and push immutable runner version
+      if: steps.version.outputs.exists != 'true'
       shell: bash
       working-directory: ${{ inputs.integration_dir }}
       env:
