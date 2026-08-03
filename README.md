@@ -83,6 +83,13 @@ the customer project.
 
 Pin the Terraform module and Action to the same release tag.
 
+## Upgrading from v0.1
+
+Keep the existing Terraform state and review the upgrade plan. The v0.1 Action
+created a standalone VM that is outside the v0.2 module. Apply v0.2, stop that
+VM before the first v0.2 rollout so only one process uses the runner ID, then
+delete it after the MIG is healthy.
+
 ## License
 
 Apache-2.0.
