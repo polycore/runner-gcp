@@ -15,6 +15,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: hashicorp/setup-terraform@v3
 
+      - name: Test deploy Action
+        run: tests/action.test.sh
+
       - name: Test COS startup script
         run: |
           bash -n terraform/vm-startup.sh

@@ -81,18 +81,12 @@ runs:
         VERSION: ${{ inputs.version }}
       run: |
         set -euo pipefail
-        VERSION_IMAGE="${IMAGE}:${VERSION}"
-        set +e
-        RESULT="$(gcloud artifacts docker images describe "${VERSION_IMAGE}" --format='value(image_summary.digest)' 2>&1)"
-        STATUS=$?
-        set -e
-        if [[ "${STATUS}" == "0" ]]; then
+        TAGS="$(gcloud artifacts docker tags list "${IMAGE}" \
+          --filter="tag:${VERSION}" --format='value(tag)')"
+        if grep -Fxq -- "${VERSION}" <<< "${TAGS}"; then
           echo "exists=true" >> "${GITHUB_OUTPUT}"
-        elif [[ "${RESULT}" == *"NOT_FOUND"* || "${RESULT}" == *"Image not found."* ]]; then
-          echo "exists=false" >> "${GITHUB_OUTPUT}"
         else
-          echo "${RESULT}" >&2
-          exit "${STATUS}"
+          echo "exists=false" >> "${GITHUB_OUTPUT}"
         fi
 
     - name: Build and push immutable runner version
@@ -152,8 +146,13 @@ runs:
           echo "error: MIG ${MIG_NAME} not found; apply the Terraform module first" >&2
           exit 1
         fi
-        gcloud components install beta --quiet
-        gcloud beta compute instance-groups managed rolling-action replace "${MIG_NAME}" \
+        TRACK=()
+        ROLL_HELP="$(gcloud compute instance-groups managed rolling-action replace --help)"
+        if ! grep -q -- '--min-ready' <<< "${ROLL_HELP}"; then
+          gcloud components install beta --quiet
+          TRACK=(beta)
+        fi
+        gcloud "${TRACK[@]}" compute instance-groups managed rolling-action replace "${MIG_NAME}" \
           --project="${PROJECT}" --zone="${ZONE}" \
           --replacement-method=substitute \
           --max-surge=1 --max-unavailable=0 --min-ready=30s --quiet
