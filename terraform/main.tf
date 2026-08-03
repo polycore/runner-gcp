@@ -447,6 +447,10 @@ resource "google_compute_instance_group_manager" "runner" {
 
   wait_for_instances = false
 
+  lifecycle {
+    ignore_changes = [version[0].name]
+  }
+
   depends_on = [google_compute_firewall.runner_health_check]
 }
 
