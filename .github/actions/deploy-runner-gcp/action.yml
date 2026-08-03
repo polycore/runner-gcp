@@ -129,10 +129,11 @@ runs:
           echo "error: MIG ${MIG_NAME} not found; apply the Terraform module first" >&2
           exit 1
         fi
+        gcloud components install beta --quiet
         gcloud beta compute instance-groups managed rolling-action replace "${MIG_NAME}" \
           --project="${PROJECT}" --zone="${ZONE}" \
           --replacement-method=substitute \
-          --max-surge=1 --max-unavailable=0 --min-ready=30s
+          --max-surge=1 --max-unavailable=0 --min-ready=30s --quiet
         gcloud compute instance-groups managed wait-until "${MIG_NAME}" \
           --project="${PROJECT}" --zone="${ZONE}" --stable --timeout=900
         HEALTH="$(gcloud compute instance-groups managed list-instances "${MIG_NAME}" \
