@@ -210,6 +210,22 @@ resource "google_project_iam_member" "deploy_compute_admin" {
   depends_on = [google_project_service.services["compute.googleapis.com"]]
 }
 
+resource "google_project_iam_custom_role" "deploy_health_check_user" {
+  project     = var.project_id
+  role_id     = "${replace(var.runner_name, "-", "_")}_health_check_user"
+  title       = "Polycore runner deploy health check user"
+  description = "Allows runner deployment CI to roll a health-checked MIG"
+  permissions = ["compute.healthChecks.use"]
+
+  depends_on = [google_project_service.services["iam.googleapis.com"]]
+}
+
+resource "google_project_iam_member" "deploy_health_check_user" {
+  project = var.project_id
+  role    = google_project_iam_custom_role.deploy_health_check_user.name
+  member  = "serviceAccount:${google_service_account.deploy.email}"
+}
+
 resource "google_service_account_iam_member" "deploy_act_as_runner" {
   service_account_id = google_service_account.runner.name
   role               = "roles/iam.serviceAccountUser"
