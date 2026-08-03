@@ -194,10 +194,12 @@ resource "google_service_account" "deploy" {
   depends_on = [google_project_service.services["iam.googleapis.com"]]
 }
 
-resource "google_project_iam_member" "deploy_ar_writer" {
-  project = var.project_id
-  role    = "roles/artifactregistry.writer"
-  member  = "serviceAccount:${google_service_account.deploy.email}"
+resource "google_artifact_registry_repository_iam_member" "deploy" {
+  project    = var.project_id
+  location   = google_artifact_registry_repository.polycore.location
+  repository = google_artifact_registry_repository.polycore.repository_id
+  role       = "roles/artifactregistry.repoAdmin"
+  member     = "serviceAccount:${google_service_account.deploy.email}"
 }
 
 resource "google_project_iam_member" "deploy_compute_admin" {
