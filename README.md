@@ -84,12 +84,58 @@ the customer project.
 
 Pin the Terraform module and Action to the same release tag.
 
+## Existing standalone VMs
+
+Deployments created by v0.1 can use the `deploy-runner-gcp-vm` Action to keep
+their standalone VM and existing Terraform state. Change the Action path and
+pin the release containing the fix; keep the existing `with` inputs:
+
+```yaml
+- uses: polycore/runner-gcp/.github/actions/deploy-runner-gcp-vm@v0.2.1
+  with:
+    mode: rollout
+    project: acme-prod
+    image: europe-west1-docker.pkg.dev/acme-prod/polycore/runner:COMMIT_SHA
+    runner_id: ${{ vars.POLYCORE_RUNNER_ID }}
+    project_slug: acme
+    integration_dir: polycore-runner
+```
+
+Keep the existing v0.1 Terraform module pin for this path. Updating it to v0.2
+starts the MIG migration described below. No runner SDK upgrade is required
+for the standalone Action.
+
+The VM prunes unused Docker images before pulling and after successful startup.
+Images referenced by containers are preserved, and a failed pull leaves the
+existing container in place. The replacement must run on the pulled image for
+ten seconds without restarting before startup succeeds.
+
+The Action waits for a startup result tied to a unique deployment ID. A startup
+failure or timeout fails the deploy; an old success message cannot pass it.
+`startup_timeout_seconds` defaults to 600 seconds. This checks container startup,
+not the control-plane connection.
+
 ## Upgrading from v0.1
 
 Keep the existing Terraform state and review the upgrade plan. The v0.1 Action
 created a standalone VM that is outside the v0.2 module. Apply v0.2, stop that
 VM before the first v0.2 rollout so only one process uses the runner ID, then
 delete it after the MIG is healthy.
+
+## Development
+
+```sh
+bash tests/action.test.sh
+bash tests/vm-startup.test.sh
+python3 -m unittest discover -s tests -v
+bash tests/vm-action.test.sh
+terraform -chdir=terraform fmt -check
+terraform -chdir=terraform init -backend=false -input=false
+terraform -chdir=terraform validate
+```
+
+Shell tests require Bash 4.4 or later. Cloud and Docker commands are mocked.
+Release tags must point to a commit merged into `main`, with CI passing.
 
 ## License
 
