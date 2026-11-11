@@ -28,3 +28,4 @@ jobs:
           terraform -chdir=terraform fmt -check
           terraform -chdir=terraform init -backend=false -input=false
           terraform -chdir=terraform validate
+          terraform -chdir=terraform test

@@ -22,7 +22,7 @@ previous version digest and repeats the rolling replacement.
 
 ```hcl
 module "polycore_runner" {
-  source = "git::https://github.com/polycore/runner-gcp.git//terraform?ref=v0.2.0"
+  source = "git::https://github.com/polycore/runner-gcp.git//terraform?ref=v0.3.0"
 
   project_id   = "acme-prod"
   region       = "europe-west1"
@@ -65,7 +65,7 @@ Authenticate as the module's `deploy_service_account_email`, then deploy:
   with:
     credentials_json: ${{ secrets.POLYCORE_DEPLOY_SA_KEY }}
 - uses: google-github-actions/setup-gcloud@v2
-- uses: polycore/runner-gcp/.github/actions/deploy-runner-gcp@v0.2.0
+- uses: polycore/runner-gcp/.github/actions/deploy-runner-gcp@v0.3.0
   with:
     project: acme-prod
     zone: europe-west1-b
@@ -84,12 +84,35 @@ the customer project.
 
 Pin the Terraform module and Action to the same release tag.
 
+`mode: deploy` is the default. It requires a size-one MIG and waits for a healthy
+replacement, rejecting an unchanged instance even if it is healthy.
+`mode: publish` builds and promotes the image without rolling the MIG, for
+staging a migration with `target_size = 0`.
+
+Each replacement uses a fresh boot disk. Startup also prunes unused images
+before pulling and after verifying the replacement container, so a reboot does
+not leave unused image layers accumulating on the same VM.
+
 ## Upgrading from v0.1
 
-Keep the existing Terraform state and review the upgrade plan. The v0.1 Action
-created a standalone VM that is outside the v0.2 module. Apply v0.2, stop that
-VM before the first v0.2 rollout so only one process uses the runner ID, then
-delete it after the MIG is healthy.
+Follow the [standalone-to-MIG migration runbook](runbook/migrate-v0.1.md).
+Stage the MIG at zero instances, publish the image, then stop the standalone VM
+before starting the MIG. The module retains the default deploy account name and
+migrates API resource addresses without disabling services. Grants on the
+shared default Compute Engine identity are preserved rather than revoked.
+
+## Development
+
+Use Bash 4.4 or later for the shell tests. Cloud and Docker commands are mocked.
+
+```sh
+bash tests/action.test.sh
+bash tests/vm-startup.test.sh
+terraform -chdir=terraform fmt -check -recursive
+terraform -chdir=terraform init -backend=false -input=false
+terraform -chdir=terraform validate
+terraform -chdir=terraform test
+```
 
 ## License
 

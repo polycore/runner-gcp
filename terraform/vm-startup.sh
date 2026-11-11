@@ -61,6 +61,7 @@ wait_for_secret() {
 decode() { printf '%s' "$1" | base64 -d; }
 
 echo "--- configuring Artifact Registry authentication ---"
+docker image prune -af
 export HOME="${STATE_DIR}"
 mkdir -p "${HOME}"
 REGISTRY_HOST="${RUNNER_IMAGE%%/*}"
@@ -114,11 +115,20 @@ for attempt in $(seq 1 60); do
   echo "Image is not available yet; retrying in 10 seconds (${attempt}/60)."
   sleep 10
 done
+RUNNER_IMAGE_ID="$(docker image inspect --format '{{.Id}}' "${RUNNER_IMAGE}")"
 
 echo "--- starting runner container (${CONTAINER_NAME}) ---"
 docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
 docker run -d --name "${CONTAINER_NAME}" --restart=always --network=host \
   "${DOCKER_ENV[@]}" \
-  "${RUNNER_IMAGE}"
+  "${RUNNER_IMAGE_ID}"
+
+sleep 10
+CONTAINER_STATE="$(docker container inspect --format '{{.Image}} {{.State.Running}} {{.State.Restarting}} {{.RestartCount}}' "${CONTAINER_NAME}")"
+if [[ "${CONTAINER_STATE}" != "${RUNNER_IMAGE_ID} true false 0" ]]; then
+  echo "error: replacement container did not stay running on the pulled image (${CONTAINER_STATE})" >&2
+  exit 1
+fi
+docker image prune -af
 
 echo "=== startup complete; waiting for the runner health endpoint ==="
