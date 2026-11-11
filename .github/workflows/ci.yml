@@ -23,14 +23,9 @@ jobs:
           bash -n terraform/vm-startup.sh
           tests/vm-startup.test.sh
 
-      - name: Test standalone VM deployment
-        run: |
-          bash -n .github/actions/deploy-runner-gcp-vm/vm-startup.sh
-          python3 -m unittest discover -s tests -v
-          tests/vm-action.test.sh
-
       - name: Validate Terraform
         run: |
           terraform -chdir=terraform fmt -check
           terraform -chdir=terraform init -backend=false -input=false
           terraform -chdir=terraform validate
+          terraform -chdir=terraform test

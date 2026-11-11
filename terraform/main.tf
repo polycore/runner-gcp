@@ -1,5 +1,5 @@
 terraform {
-  required_version = ">= 1.5.0"
+  required_version = ">= 1.7.0"
   required_providers {
     google = {
       source  = "hashicorp/google"
@@ -68,6 +68,17 @@ variable "machine_type" {
   description = "Compute Engine machine type."
   type        = string
   default     = "e2-micro"
+}
+
+variable "target_size" {
+  description = "Runner instances: 0 to stage a migration, 1 for normal operation."
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = contains([0, 1], var.target_size)
+    error_message = "target_size must be 0 or 1."
+  }
 }
 
 variable "enable_firestore" {
@@ -400,7 +411,7 @@ resource "google_compute_instance_group_manager" "runner" {
   zone               = local.zone
   name               = var.runner_name
   base_instance_name = var.runner_name
-  target_size        = 1
+  target_size        = var.target_size
 
   version {
     instance_template = google_compute_instance_template.runner.id

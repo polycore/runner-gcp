@@ -22,7 +22,7 @@ previous version digest and repeats the rolling replacement.
 
 ```hcl
 module "polycore_runner" {
-  source = "git::https://github.com/polycore/runner-gcp.git//terraform?ref=v0.2.0"
+  source = "git::https://github.com/polycore/runner-gcp.git//terraform?ref=v0.3.0"
 
   project_id   = "acme-prod"
   region       = "europe-west1"
@@ -65,7 +65,7 @@ Authenticate as the module's `deploy_service_account_email`, then deploy:
   with:
     credentials_json: ${{ secrets.POLYCORE_DEPLOY_SA_KEY }}
 - uses: google-github-actions/setup-gcloud@v2
-- uses: polycore/runner-gcp/.github/actions/deploy-runner-gcp@v0.2.0
+- uses: polycore/runner-gcp/.github/actions/deploy-runner-gcp@v0.3.0
   with:
     project: acme-prod
     zone: europe-west1-b
@@ -84,58 +84,35 @@ the customer project.
 
 Pin the Terraform module and Action to the same release tag.
 
-## Existing standalone VMs
+`mode: deploy` is the default. It requires a size-one MIG and waits for a healthy
+replacement, rejecting an unchanged instance even if it is healthy.
+`mode: publish` builds and promotes the image without rolling the MIG, for
+staging a migration with `target_size = 0`.
 
-Deployments created by v0.1 can use the `deploy-runner-gcp-vm` Action to keep
-their standalone VM and existing Terraform state. Change the Action path and
-pin the release containing the fix; keep the existing `with` inputs:
-
-```yaml
-- uses: polycore/runner-gcp/.github/actions/deploy-runner-gcp-vm@v0.2.1
-  with:
-    mode: rollout
-    project: acme-prod
-    image: europe-west1-docker.pkg.dev/acme-prod/polycore/runner:COMMIT_SHA
-    runner_id: ${{ vars.POLYCORE_RUNNER_ID }}
-    project_slug: acme
-    integration_dir: polycore-runner
-```
-
-Keep the existing v0.1 Terraform module pin for this path. Updating it to v0.2
-starts the MIG migration described below. No runner SDK upgrade is required
-for the standalone Action.
-
-The VM prunes unused Docker images before pulling and after successful startup.
-Images referenced by containers are preserved, and a failed pull leaves the
-existing container in place. The replacement must run on the pulled image for
-ten seconds without restarting before startup succeeds.
-
-The Action waits for a startup result tied to a unique deployment ID. A startup
-failure or timeout fails the deploy; an old success message cannot pass it.
-`startup_timeout_seconds` defaults to 600 seconds. This checks container startup,
-not the control-plane connection.
+Each replacement uses a fresh boot disk. Startup also prunes unused images
+before pulling and after verifying the replacement container, so a reboot does
+not leave unused image layers accumulating on the same VM.
 
 ## Upgrading from v0.1
 
-Keep the existing Terraform state and review the upgrade plan. The v0.1 Action
-created a standalone VM that is outside the v0.2 module. Apply v0.2, stop that
-VM before the first v0.2 rollout so only one process uses the runner ID, then
-delete it after the MIG is healthy.
+Follow the [standalone-to-MIG migration runbook](runbook/migrate-v0.1.md).
+Stage the MIG at zero instances, publish the image, then stop the standalone VM
+before starting the MIG. The module retains the default deploy account name and
+migrates API resource addresses without disabling services. Grants on the
+shared default Compute Engine identity are preserved rather than revoked.
 
 ## Development
+
+Use Bash 4.4 or later for the shell tests. Cloud and Docker commands are mocked.
 
 ```sh
 bash tests/action.test.sh
 bash tests/vm-startup.test.sh
-python3 -m unittest discover -s tests -v
-bash tests/vm-action.test.sh
-terraform -chdir=terraform fmt -check
+terraform -chdir=terraform fmt -check -recursive
 terraform -chdir=terraform init -backend=false -input=false
 terraform -chdir=terraform validate
+terraform -chdir=terraform test
 ```
-
-Shell tests require Bash 4.4 or later. Cloud and Docker commands are mocked.
-Release tags must point to a commit merged into `main`, with CI passing.
 
 ## License
 

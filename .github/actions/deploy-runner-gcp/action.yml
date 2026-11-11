@@ -4,6 +4,10 @@ description: >
   and roll the Terraform-managed runner MIG.
 
 inputs:
+  mode:
+    description: deploy rolls the MIG; publish only builds and promotes the image for a staged migration
+    required: false
+    default: deploy
   project:
     description: GCP project that hosts the MIG and Artifact Registry
     required: true
@@ -49,8 +53,13 @@ runs:
       env:
         IMAGE: ${{ inputs.image }}
         VERSION: ${{ inputs.version }}
+        MODE: ${{ inputs.mode }}
       run: |
         set -euo pipefail
+        case "${MODE}" in
+          deploy|publish) ;;
+          *) echo "error: mode must be deploy or publish" >&2; exit 1 ;;
+        esac
         if [[ "${IMAGE}" == *:* || "${IMAGE}" == *@* ]]; then
           echo "error: image must not include a tag or digest" >&2
           exit 1
@@ -61,6 +70,22 @@ runs:
         fi
         if [[ "${VERSION}" == "live" ]]; then
           echo "error: version must be immutable and cannot be live" >&2
+          exit 1
+        fi
+
+    - name: Validate deployment target
+      if: inputs.mode == 'deploy'
+      shell: bash
+      env:
+        MIG_NAME: ${{ inputs.runner_name }}
+        PROJECT: ${{ inputs.project }}
+        ZONE: ${{ inputs.zone }}
+      run: |
+        set -euo pipefail
+        TARGET_SIZE="$(gcloud compute instance-groups managed describe "${MIG_NAME}" \
+          --project="${PROJECT}" --zone="${ZONE}" --format='value(targetSize)')"
+        if [[ "${TARGET_SIZE}" != "1" ]]; then
+          echo "error: runner MIG must have target_size=1 before deployment (use mode=publish while staging)" >&2
           exit 1
         fi
 
@@ -134,6 +159,7 @@ runs:
         } >> "${GITHUB_OUTPUT}"
 
     - name: Roll runner MIG
+      if: inputs.mode == 'deploy'
       shell: bash
       env:
         MIG_NAME: ${{ inputs.runner_name }}
@@ -146,6 +172,8 @@ runs:
           echo "error: MIG ${MIG_NAME} not found; apply the Terraform module first" >&2
           exit 1
         fi
+        ORIGINAL_INSTANCES="$(gcloud compute instance-groups managed list-instances "${MIG_NAME}" \
+          --project="${PROJECT}" --zone="${ZONE}" --format='value(instance)')"
         TRACK=()
         ROLL_HELP="$(gcloud compute instance-groups managed rolling-action replace --help)"
         if ! grep -q -- '--min-ready' <<< "${ROLL_HELP}"; then
@@ -158,6 +186,18 @@ runs:
           --max-surge=1 --max-unavailable=0 --min-ready=30s --quiet
         gcloud compute instance-groups managed wait-until "${MIG_NAME}" \
           --project="${PROJECT}" --zone="${ZONE}" --stable --timeout=900
+        INSTANCES="$(gcloud compute instance-groups managed list-instances "${MIG_NAME}" \
+          --project="${PROJECT}" --zone="${ZONE}" --format='value(instance)')"
+        if [[ -z "${INSTANCES}" ]]; then
+          echo "error: runner MIG has no replacement instance" >&2
+          exit 1
+        fi
+        while IFS= read -r instance; do
+          if grep -Fxq -- "${instance}" <<< "${ORIGINAL_INSTANCES}"; then
+            echo "error: runner MIG still contains a pre-deployment instance" >&2
+            exit 1
+          fi
+        done <<< "${INSTANCES}"
         HEALTH="$(gcloud compute instance-groups managed list-instances "${MIG_NAME}" \
           --project="${PROJECT}" --zone="${ZONE}" \
           --format='value(instanceHealth[0].detailedHealthState)')"

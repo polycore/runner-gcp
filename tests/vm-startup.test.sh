@@ -51,6 +51,11 @@ cat > "${TMP}/bin/docker" <<'EOF'
 printf 'docker' >> "${COMMAND_LOG}"
 printf ' %q' "$@" >> "${COMMAND_LOG}"
 printf '\n' >> "${COMMAND_LOG}"
+case " $* " in
+  *" pull "*) [[ "${MOCK_PULL_FAIL:-false}" != true ]] || exit 1 ;;
+  *" image inspect "*) echo sha256:test ;;
+  *" container inspect "*) echo "${MOCK_CONTAINER_STATE:-sha256:test true false 0}" ;;
+esac
 EOF
 
 cat > "${TMP}/bin/docker-credential-gcr" <<'EOF'
@@ -71,6 +76,8 @@ printf '\n' >> "${COMMAND_LOG}"
 EOF
 
 chmod +x "${TMP}/bin/"*
+printf '#!/usr/bin/env bash\nexit 0\n' > "${TMP}/bin/sleep"
+chmod +x "${TMP}/bin/sleep"
 export COMMAND_LOG="${TMP}/commands.log"
 export PATH="${TMP}/bin:${PATH}"
 export POLYCORE_STARTUP_LOG="${TMP}/startup.log"
@@ -91,5 +98,31 @@ grep -Fq 'PLAIN_VALUE=hello\ world' "${COMMAND_LOG}"
 grep -Fq 'iptables -I INPUT -p tcp -s 130.211.0.0/22 --dport 8080 -j ACCEPT' "${COMMAND_LOG}"
 grep -Fq 'CMD ["node_modules/.bin/polycore-runner", "connect", "--config", "/app/integration/polycore.json"]' \
   "${ROOT}/Dockerfile.example"
+
+python3 - "${COMMAND_LOG}" <<'PY'
+import sys
+lines = open(sys.argv[1]).read().splitlines()
+prunes = [i for i, line in enumerate(lines) if line == 'docker image prune -af']
+pull = next(i for i, line in enumerate(lines) if line.startswith('docker pull '))
+run = next(i for i, line in enumerate(lines) if line.startswith('docker run '))
+assert len(prunes) == 2 and prunes[0] < pull < run < prunes[1]
+assert lines[run].endswith(' sha256:test')
+PY
+
+: > "${COMMAND_LOG}"
+if MOCK_PULL_FAIL=true bash "${ROOT}/terraform/vm-startup.sh" > "${TMP}/failure.log" 2>&1; then
+  echo "failed pull must fail startup" >&2
+  exit 1
+fi
+if grep -Fq 'docker rm ' "${COMMAND_LOG}" || grep -Fq 'startup complete' "${TMP}/failure.log"; then
+  echo "failed pull must preserve the old container and never report success" >&2
+  exit 1
+fi
+for state in 'sha256:old true false 0' 'sha256:test false false 0' 'sha256:test true true 1' 'sha256:test true false 1'; do
+  if MOCK_CONTAINER_STATE="${state}" bash "${ROOT}/terraform/vm-startup.sh" > "${TMP}/failure.log" 2>&1; then
+    echo "unstable or wrong-image container must fail startup" >&2
+    exit 1
+  fi
+done
 
 echo "vm-startup.sh test passed"
