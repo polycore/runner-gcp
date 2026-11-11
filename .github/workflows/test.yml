@@ -1,0 +1,22 @@
+name: Test deploy action
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate shell scripts
+        run: |
+          for script in .github/actions/deploy-runner-gcp/*.sh tests/*.sh; do
+            bash -n "${script}"
+          done
+      - name: Test deployment gate and startup failures
+        run: python3 -m unittest discover -s tests -v
+      - name: Test composite action wiring
+        run: bash tests/action.test.sh

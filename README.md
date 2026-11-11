@@ -12,7 +12,7 @@ Contains:
   provision / rollout / teardown the GCE VM
 - **Dockerfile.example** - reference customer image layout
 
-Your integration repo stays thin: `polycore.json`, `actions/`, `context/`,
+Your runner repo stays thin: `polycore.json`, `actions/`, `context/`,
 `Dockerfile`, pinned `@polycore/runner` on npm.
 
 ## Runtime contract
@@ -42,7 +42,7 @@ fetched onto the fixed container env names above.
 
 ```hcl
 module "polycore_runner" {
-  source = "git::https://github.com/polycore/runner-gcp.git//terraform?ref=v0.1.3"
+  source = "git::https://github.com/polycore/runner-gcp.git//terraform?ref=v0.1.4"
 
   project_id     = "acme-prod"
   project_number = "123456789012"
@@ -67,7 +67,7 @@ source. No company incorporation required.
   with:
     credentials_json: ${{ secrets.POLYCORE_DEPLOY_SA_KEY }}
 - uses: google-github-actions/setup-gcloud@v2
-- uses: polycore/runner-gcp/.github/actions/deploy-runner-gcp@v0.1.3
+- uses: polycore/runner-gcp/.github/actions/deploy-runner-gcp@v0.1.4
   with:
     mode: rollout          # or provision | teardown
     project: acme-prod
@@ -81,6 +81,31 @@ source. No company incorporation required.
 ```
 
 First boot: `mode: provision`. Later: `mode: rollout`.
+
+Both modes wait up to 600 seconds for a startup result tied to that deployment.
+Set `startup_timeout_seconds` to override the deadline. A failed startup or a
+missing result fails the Action, even if GCP accepted the VM reset. Old startup
+messages cannot satisfy a new deployment.
+
+The VM prunes unused Docker images before pulling to recover disk space, keeps
+the existing container until the pull succeeds, and prunes again after the new
+container stays running on the pulled image for ten seconds. Images referenced
+by containers are preserved. This verifies container startup, not a connection
+to the Polycore control plane.
+
+This fix targets the standalone VMs deployed by v0.1. The v0.2 preset uses a
+different Terraform-managed MIG deployment path; upgrading to it requires an
+infrastructure migration.
+
+## Tests
+
+```sh
+python3 -m unittest discover -s tests -v
+bash tests/action.test.sh
+```
+
+Tests use Python's standard library and Ruby's YAML parser, with isolated fake
+VM commands. They do not contact GCP or operate on the local Docker daemon.
 
 ## License
 

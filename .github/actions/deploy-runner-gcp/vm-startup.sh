@@ -6,11 +6,24 @@
 # Metadata is set by the deploy-runner-gcp GitHub Action.
 
 set -euo pipefail
-exec > >(tee -a /var/log/polycore-runner-startup.log) 2>&1
+exec > >(tee -a "${POLYCORE_STARTUP_LOG:-/var/log/polycore-runner-startup.log}") 2>&1
 echo "=== polycore runner startup $(date -u +%FT%TZ) ==="
 
-md() { curl -s -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/$1"; }
+md() { curl -fsS -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/$1"; }
 attr() { md "attributes/$1"; }
+
+DEPLOYMENT_ID="$(attr deployment-id)"
+if [[ ! "${DEPLOYMENT_ID}" =~ ^[a-zA-Z0-9-]+$ ]]; then
+  echo "error: missing or invalid deployment-id metadata" >&2
+  exit 1
+fi
+report_failure() {
+  local status=$?
+  if [ "${status}" -ne 0 ]; then
+    echo "=== startup failed; deployment=${DEPLOYMENT_ID}; exit=${status} ==="
+  fi
+}
+trap report_failure EXIT
 
 TOKEN="$(md "service-accounts/default/token" | python3 -c "import sys,json;print(json.load(sys.stdin)['access_token'])")"
 
@@ -30,7 +43,7 @@ EXTRA_SECRETS_JSON="$(attr extra-secrets || true)"
 EXTRA_ENV_JSON="$(attr extra-env || true)"
 
 fetch_secret() {
-  curl -s -H "Authorization: Bearer ${TOKEN}" \
+  curl -fsS -H "Authorization: Bearer ${TOKEN}" \
     "https://secretmanager.googleapis.com/v1/projects/${HOST_PROJECT}/secrets/$1/versions/latest:access" \
     | python3 -c "import sys,json,base64;print(base64.b64decode(json.load(sys.stdin)['payload']['data']).decode('utf-8'),end='')"
 }
@@ -94,12 +107,33 @@ REGISTRY_HOST="${RUNNER_IMAGE%%/*}"
 echo "${TOKEN}" | docker login -u oauth2accesstoken --password-stdin "https://${REGISTRY_HOST}"
 
 echo "--- pulling ${RUNNER_IMAGE} ---"
+# Keep the running image while reclaiming space before a potentially large pull.
+docker image prune -af
 docker pull "${RUNNER_IMAGE}"
+RUNNER_IMAGE_ID="$(docker image inspect --format '{{.Id}}' "${RUNNER_IMAGE}")"
 
 echo "--- (re)starting runner container (${CONTAINER_NAME}) ---"
 docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
 docker run -d --name "${CONTAINER_NAME}" --restart=always \
   "${DOCKER_ENV[@]}" \
-  "${RUNNER_IMAGE}"
+  "${RUNNER_IMAGE_ID}"
 
-echo "=== startup complete; runner container launched ==="
+verify_container() {
+  local state
+  state="$(docker container inspect --format '{{.Image}} {{.State.Running}} {{.State.Restarting}} {{.RestartCount}}' "${CONTAINER_NAME}")"
+  if [ "${state}" != "${RUNNER_IMAGE_ID} true false 0" ]; then
+    echo "error: replacement container did not stay running on the pulled image (${state})" >&2
+    return 1
+  fi
+}
+
+echo "--- verifying replacement container ---"
+for attempt in {1..10}; do
+  sleep 1
+  verify_container
+done
+
+echo "--- removing unused runner images ---"
+docker image prune -af
+verify_container
+echo "=== startup complete; deployment=${DEPLOYMENT_ID} ==="
